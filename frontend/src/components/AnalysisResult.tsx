@@ -1,4 +1,5 @@
 import {
+  Anchor,
   Alert,
   Badge,
   Box,
@@ -44,6 +45,7 @@ const LIFECYCLE_DETAIL_PATTERNS = [
 ];
 
 const ISO_TIMESTAMP_REGEX = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/;
+const CONFIRMATION_CODE_REGEX = /\b\d{16}\b/g;
 
 function extractIsoTimestamp(text: string): string | null {
   const match = text.match(ISO_TIMESTAMP_REGEX);
@@ -61,10 +63,47 @@ function inferSeverity(eventText: string): 'critical' | 'warning' | 'info' {
   return 'info';
 }
 
-export function AnalysisResult({ data, requestId, durationMs }: AnalysisResultProps) {
+function collectConfirmationCodes(data: AgentOutput): string[] {
+  const codes = new Set<string>();
+
+  for (const code of data.confirmation_codes || []) {
+    codes.add(code);
+  }
+
+  Object.keys(data.per_confirmation_code_summaries || {}).forEach((code) => codes.add(code));
+  Object.keys(data.per_confirmation_code_source_summary || {}).forEach((code) => codes.add(code));
+
+  const candidateTexts: string[] = [
+    data.summary,
+    data.root_cause || '',
+    ...data.timeline.map((entry) => entry.event),
+    ...data.key_findings.map((finding) => finding.description),
+    ...data.key_findings.flatMap((finding) => finding.evidence),
+    ...(data.warnings || []),
+  ];
+
+  for (const text of candidateTexts) {
+    const matches = text.match(CONFIRMATION_CODE_REGEX);
+    if (!matches) {
+      continue;
+    }
+    for (const match of matches) {
+      codes.add(match);
+    }
+  }
+
+  return Array.from(codes).sort();
+}
+
+export function AnalysisResult({
+  data,
+  requestId,
+  durationMs,
+}: AnalysisResultProps) {
   const hasSourceSummary = !!data.source_summary;
   const perCodeSummaries = Object.entries(data.per_confirmation_code_source_summary || {});
   const perCodeExecutiveSummaries = Object.entries(data.per_confirmation_code_summaries || {});
+  const confirmationCodes = collectConfirmationCodes(data);
 
   const synthesizedLifecycleDetails = new Set<string>();
   for (const warning of data.warnings || []) {
@@ -137,6 +176,20 @@ export function AnalysisResult({ data, requestId, durationMs }: AnalysisResultPr
       const rcLines = doc.splitTextToSize(data.root_cause, pageWidth - 28);
       doc.text(rcLines, 14, y);
       y += rcLines.length * 5 + 6;
+    }
+
+    // Confirmation codes
+    if (confirmationCodes.length > 0) {
+      if (y > 240) { doc.addPage(); y = 20; }
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Confirmation Codes', 14, y);
+      y += 7;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      const codeLines = doc.splitTextToSize(confirmationCodes.join(', '), pageWidth - 28);
+      doc.text(codeLines, 14, y);
+      y += codeLines.length * 5 + 6;
     }
 
     // Per-confirmation-code executive summaries
@@ -256,6 +309,7 @@ export function AnalysisResult({ data, requestId, durationMs }: AnalysisResultPr
       ['Executive Summary', data.summary],
       ['Root Cause', data.root_cause || 'N/A'],
       ['Confidence', data.root_cause_confidence || 'N/A'],
+      ['Confirmation Codes', confirmationCodes.length > 0 ? confirmationCodes.join(', ') : 'N/A'],
       ['Request ID', requestId],
       ['Duration (ms)', String(durationMs)],
       ['Tools Used', data.tools_invoked.join(', ')],
@@ -272,6 +326,16 @@ export function AnalysisResult({ data, requestId, durationMs }: AnalysisResultPr
       const perCodeSummarySheet = XLSX.utils.aoa_to_sheet(perCodeSummaryData);
       perCodeSummarySheet['!cols'] = [{ wch: 24 }, { wch: 100 }];
       XLSX.utils.book_append_sheet(wb, perCodeSummarySheet, 'Per Code Narrative');
+    }
+
+    if (confirmationCodes.length > 0) {
+      const confirmationCodeData: (string | number)[][] = [['Confirmation Code']];
+      for (const confirmationCode of confirmationCodes) {
+        confirmationCodeData.push([confirmationCode]);
+      }
+      const confirmationCodeSheet = XLSX.utils.aoa_to_sheet(confirmationCodeData);
+      confirmationCodeSheet['!cols'] = [{ wch: 24 }];
+      XLSX.utils.book_append_sheet(wb, confirmationCodeSheet, 'Confirmation Codes');
     }
 
     // Aggregate source summary sheet
@@ -323,6 +387,23 @@ export function AnalysisResult({ data, requestId, durationMs }: AnalysisResultPr
     const wbOut = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
     saveAs(new Blob([wbOut], { type: 'application/octet-stream' }), `investigation-${requestId}.xlsx`);
   };
+
+  const handleDownloadLink = (link: string, event: React.MouseEvent<HTMLAnchorElement>) => {
+    const normalized = link.trim().toLowerCase();
+    if (normalized.includes('export://') && normalized.includes('pdf')) {
+      event.preventDefault();
+      exportToPdf();
+      return;
+    }
+    if (
+      normalized.includes('export://') &&
+      (normalized.includes('xlsx') || normalized.includes('xls') || normalized.includes('excel'))
+    ) {
+      event.preventDefault();
+      exportToExcel();
+    }
+  };
+
   return (
     <Stack gap="xl">
       {/* Results section — side-by-side Activity Log + Findings */}
@@ -464,6 +545,28 @@ export function AnalysisResult({ data, requestId, durationMs }: AnalysisResultPr
                           </Text>
                         ))}
                       </Card>
+                    ))}
+                  </Stack>
+                </>
+              )}
+
+              {/* LLM-provided download links */}
+              {data.download_links && Object.keys(data.download_links).length > 0 && (
+                <>
+                  <Divider my="sm" />
+                  <Text fw={600} mb="xs">Download Links</Text>
+                  <Stack gap="xs">
+                    {Object.entries(data.download_links).map(([label, link]) => (
+                      <Anchor
+                        key={label}
+                        href={link}
+                        target="_blank"
+                        rel="noreferrer"
+                        size="sm"
+                        onClick={(event) => handleDownloadLink(link, event)}
+                      >
+                        {label}
+                      </Anchor>
                     ))}
                   </Stack>
                 </>

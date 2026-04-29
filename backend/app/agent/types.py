@@ -26,6 +26,8 @@ class SourceSummary(BaseModel):
 
 class AgentOutput(BaseModel):
     summary: str
+    confirmation_codes: list[str] = []
+    download_links: dict[str, str] = {}
     per_confirmation_code_summaries: dict[str, str] = {}
     key_findings: list[Finding] = []
     root_cause: str | None = None

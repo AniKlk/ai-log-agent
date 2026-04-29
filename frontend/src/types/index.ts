@@ -21,6 +21,8 @@ export interface SourceSummary {
 
 export interface AgentOutput {
   summary: string;
+  confirmation_codes?: string[];
+  download_links?: Record<string, string>;
   per_confirmation_code_summaries?: Record<string, string>;
   key_findings: Finding[];
   root_cause: string | null;

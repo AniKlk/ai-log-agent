@@ -25,7 +25,8 @@ class SessionLogStatsInput(BaseModel):
         ...,
         description=(
             "Client code to scope the search, e.g. 'LSAC'. "
-            "Matched against Exam.ClientCode in ExamSession/exam-session."
+            "Matched against Exam.ClientCode in ExamSession/exam-session. "
+            "Use 'ALL' (or '*'/'ANY') to aggregate across all clients."
         ),
     )
     start_date: str = Field(
@@ -98,13 +99,23 @@ class GetSessionLogStatsTool(BaseTool):
         # ------------------------------------------------------------------
         # Step 1: paginate ALL sessions for the client
         # ------------------------------------------------------------------
-        client_code_safe = args.client_code.replace("'", "''")
-        q1 = (
-            f"SELECT c.id, c.Id, c.ConfirmationCode "
-            f"FROM c "
-            f"WHERE IS_DEFINED(c.Exam.ClientCode) "
-            f"AND c.Exam.ClientCode = '{client_code_safe}'"
-        )
+        client_code_normalized = args.client_code.strip().upper()
+        all_clients = client_code_normalized in {"ALL", "ANY", "*"}
+
+        if all_clients:
+            q1 = (
+                "SELECT c.id, c.Id, c.ConfirmationCode "
+                "FROM c "
+                "WHERE IS_DEFINED(c.Id) OR IS_DEFINED(c.id)"
+            )
+        else:
+            client_code_safe = args.client_code.replace("'", "''")
+            q1 = (
+                f"SELECT c.id, c.Id, c.ConfirmationCode "
+                f"FROM c "
+                f"WHERE IS_DEFINED(c.Exam.ClientCode) "
+                f"AND c.Exam.ClientCode = '{client_code_safe}'"
+            )
 
         session_map: dict[str, str | None] = {}
         async for row in exam_container.query_items(query=q1):
@@ -113,8 +124,9 @@ class GetSessionLogStatsTool(BaseTool):
                 session_map[sid] = row.get("ConfirmationCode")
 
         logger.info(
-            "getSessionLogStats: %d sessions for client %s",
-            len(session_map), args.client_code,
+            "getSessionLogStats: %d sessions for scope %s",
+            len(session_map),
+            "ALL_CLIENTS" if all_clients else args.client_code,
         )
 
         if not session_map:
