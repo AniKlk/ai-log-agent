@@ -1,0 +1,28 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #0A1023;
+  --prometric-green: #00855f;
+  --prometric-navy: #071c35;
+  --prometric-gold: #ffcb33;
+  --prometric-border: #878c96;
+  --prometric-text: #151515;
+  --prometric-bg-secondary: #f7f8fa;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: 'IBM Plex Sans', sans-serif;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: 'IBM Plex Sans', sans-serif;
+  margin: 0;
+}
+
+/* Remove dark mode override */
