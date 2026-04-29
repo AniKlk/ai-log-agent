@@ -75,6 +75,7 @@ If you prefer key-based auth for Cosmos DB, set `COSMOS_KEY` in `.env`.
 
 ```bash
 cd frontend
+cp .env.example .env.local   # defaults to http://localhost:8000 — change if backend is elsewhere
 npm install
 npm run dev
 ```
