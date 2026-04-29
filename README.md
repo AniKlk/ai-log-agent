@@ -84,6 +84,18 @@ Open `http://localhost:3000`.
 
 ### 5. Docker (optional)
 
+Run both services together with Docker Compose:
+
+```bash
+cp .env.example backend/.env   # fill in values first
+docker compose up --build
+```
+
+- Frontend: `http://localhost:3000`
+- Backend:  `http://localhost:8000`
+
+Or build/run individually:
+
 ```bash
 # Backend
 docker build -t ai-log-agent-backend ./backend
