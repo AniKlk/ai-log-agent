@@ -55,7 +55,11 @@ The `keywords` parameter is matched against `Entries.Metadata` text (case-insens
 | Exam paused | `["exam paused", "session paused"]` |
 | Multiple disconnects (≥2) | same keywords + `min_hits: 2` |
 
-**NEVER use the broad string `"disconnect"` when the user asks specifically about candidate disconnects.** That would also count proctor disconnects, readiness agent disconnects, etc.
+**MANDATORY RULE — candidate disconnect queries MUST use `"Candidate disconnected"` (not `"disconnected"`):**
+- User says "candidate disconnected", "candidates disconnected", "candidate disconnect", "multiple disconnect", "disconnected multiple times", "disconnect issues" → keywords MUST be `["Candidate disconnected"]`
+- Using the broad string `"disconnected"` would ALSO count proctor disconnects and readiness agent disconnects — this gives a WRONG, INFLATED count
+- If the user says "all disconnects" or "any disconnect" or explicitly asks about all roles together, ONLY then use `["disconnected"]`
+
 Always set `include_metadata_samples: true` so the LLM can confirm what the matching entries actually say.
 
 - Set `timespan_days` to cover the user's requested period (e.g. 30 for a month-long search).
