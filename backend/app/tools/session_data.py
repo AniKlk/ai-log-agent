@@ -66,6 +66,25 @@ _MARKER_MESSAGE_TERMS = (
     "candidate-app exit marker (role-probe)",
     "candidate-app security marker (role-probe)",
 )
+_HIGH_PRIORITY_MESSAGE_TERMS = (
+    "lockdown bypass detected",
+    "content protection bypassed",
+    "content_protection_bypassed",
+    "candidate-app security marker",
+    "candidate-app exit marker",
+    "candidate-app login marker",
+    "candidate exited",
+    "candidate exit",
+    "exiting application",
+    "exiting app",
+    "exit lockdown window",
+    "ipc server action received: exit",
+    "set confirmation code",
+    "confirmation code set",
+    "logged into application",
+    "paused",
+    "resume",
+)
 
 
 class GetSessionDataTool(BaseTool):
@@ -1293,23 +1312,37 @@ class GetSessionDataTool(BaseTool):
         if len(serialized) <= max_chars:
             return events, errors, False
 
-        # Keep errors (higher priority) + truncate events
+        # Keep errors (higher priority) + truncate events while preserving
+        # security violations and lifecycle-story markers across Cosmos and App Insights.
         error_json = json.dumps([e.model_dump() for e in errors])
         remaining_chars = max_chars - len(error_json) - 100  # buffer for structure
 
+        critical_story_events = [
+            event
+            for event in events
+            if any(term in event.message.lower() for term in _HIGH_PRIORITY_MESSAGE_TERMS)
+            or event.source in {"session-log", "chat"}
+        ]
         detailed_events = [
             event
             for event in events
-            if event.source == "app-insights"
+            if event not in critical_story_events
+            and event.source == "app-insights"
             and not any(term in event.message.lower() for term in _MARKER_MESSAGE_TERMS)
         ]
-        marker_events = [
+        remaining_events = [
             event
             for event in events
-            if event.source != "app-insights"
-            or any(term in event.message.lower() for term in _MARKER_MESSAGE_TERMS)
+            if event not in critical_story_events and event not in detailed_events
         ]
-        prioritized_events = detailed_events + marker_events
+        prioritized_events: list[LogEvent] = []
+        seen_event_keys: set[tuple[str, str, str, str]] = set()
+        for event in [*critical_story_events, *remaining_events, *detailed_events]:
+            key = (event.timestamp, event.message, event.type, event.source)
+            if key in seen_event_keys:
+                continue
+            seen_event_keys.add(key)
+            prioritized_events.append(event)
 
         truncated_events: list[LogEvent] = []
         current_chars = 0

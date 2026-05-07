@@ -18,29 +18,43 @@ async def resolve_exam_session_id(
 
     Returns (exam_session_id, session_record) or raises ValueError if not found.
     """
+    sessions = await resolve_exam_sessions(cosmos_client, confirmation_code)
+    if sessions:
+        exam_session_id, item = sessions[-1]
+        logger.info(
+            "Resolved confirmation code to exam session",
+            extra={"confirmationCode": confirmation_code},
+        )
+        return exam_session_id, item
+
+    raise ValueError(f"No session found for confirmation code: {confirmation_code}")
+
+
+async def resolve_exam_sessions(
+    cosmos_client: CosmosClient,
+    confirmation_code: str,
+) -> list[tuple[str, dict]]:
+    """Resolve all exam-session records for a confirmation code, oldest to newest."""
     database = cosmos_client.get_database_client(_SESSION_DATABASE)
     container = database.get_container_client(_SESSION_CONTAINER)
 
     query = (
-        "SELECT TOP 1 * FROM c "
+        "SELECT * FROM c "
         "WHERE c.ConfirmationCode = @code "
-        "ORDER BY c.CreatedDate DESC"
+        "ORDER BY c.CreatedDate ASC"
     )
     parameters: list[dict] = [{"name": "@code", "value": confirmation_code}]
 
+    sessions: list[tuple[str, dict]] = []
     items = container.query_items(query=query, parameters=parameters)
     async for item in items:
         exam_session_id = (
             item.get("Id") or item.get("ExamSessionId") or item.get("examSessionId", "")
         )
         if exam_session_id:
-            logger.info(
-                "Resolved confirmation code to exam session",
-                extra={"confirmationCode": confirmation_code},
-            )
-            return exam_session_id, item
+            sessions.append((str(exam_session_id), item))
 
-    raise ValueError(f"No session found for confirmation code: {confirmation_code}")
+    return sessions
 
 
 def normalize_timestamp(value: object) -> str:

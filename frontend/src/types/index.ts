@@ -32,7 +32,7 @@ export interface AppInsightsSummary {
 
 export interface AppInsightsLogRow {
   timestamp: string | null;
-  type: 'info' | 'error' | 'disconnect';
+  type: 'info' | 'warning' | 'error' | 'disconnect';
   message: string;
 }
 

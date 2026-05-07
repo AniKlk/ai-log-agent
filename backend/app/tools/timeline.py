@@ -8,7 +8,7 @@ from azure.monitor.query import LogsQueryStatus
 from azure.monitor.query.aio import LogsQueryClient
 from pydantic import BaseModel
 
-from app.tools._cosmos_helpers import normalize_timestamp, resolve_exam_session_id
+from app.tools._cosmos_helpers import normalize_timestamp, resolve_exam_sessions
 from app.tools.base import BaseTool
 from app.tools.models import TimelineEvent, TimelineInput, TimelineOutput
 
@@ -22,6 +22,25 @@ _SESSION_LOG_CONTAINER = "session-log"
 _DEFAULT_TIMESPAN_DAYS = 30
 _MAX_TIMESPAN_DAYS = 730
 _TOKEN_ESTIMATE_CHARS = 4
+_TIMELINE_PRIORITY_TERMS = (
+    "lockdown bypass detected",
+    "content protection bypassed",
+    "content_protection_bypassed",
+    "candidate-app security marker",
+    "candidate-app exit marker",
+    "candidate-app login marker",
+    "candidate exited",
+    "candidate exit",
+    "exiting application",
+    "exiting app",
+    "exit lockdown window",
+    "ipc server action received: exit",
+    "set confirmation code",
+    "confirmation code set",
+    "logged into application",
+    "paused",
+    "resume",
+)
 
 
 class GetSessionTimelineTool(BaseTool):
@@ -60,25 +79,42 @@ class GetSessionTimelineTool(BaseTool):
         is_multi = len(confirmation_codes) > 1
 
         for confirmation_code in confirmation_codes:
-            # Resolve ConfirmationCode → ExamSessionId
+            # Resolve ConfirmationCode → all related ExamSessionIds
             try:
-                exam_session_id, session_record = await resolve_exam_session_id(
+                session_refs = await resolve_exam_sessions(
                     self._cosmos_client, confirmation_code
                 )
             except ValueError:
                 logger.warning("No session found for %s", confirmation_code)
                 continue
 
-            system_events = await self._query_system_events(
-                confirmation_code,
-                exam_session_id,
-                session_record,
-            )
-            infra_events = await self._query_infra_events(exam_session_id, session_record)
-            session_log_events = await self._query_session_log(exam_session_id)
-            chat_events = await self._query_chat_events(exam_session_id)
+            if not session_refs:
+                logger.warning("No session found for %s", confirmation_code)
+                continue
 
-            current_timeline = system_events + infra_events + session_log_events + chat_events
+            current_timeline: list[TimelineEvent] = []
+            for exam_session_id, session_record in session_refs:
+                system_events = await self._query_system_events(
+                    confirmation_code,
+                    exam_session_id,
+                    session_record,
+                )
+                infra_events = await self._query_infra_events(exam_session_id, session_record)
+                session_log_events = await self._query_session_log(exam_session_id)
+                chat_events = await self._query_chat_events(exam_session_id)
+
+                current_timeline.extend(system_events + infra_events + session_log_events + chat_events)
+
+            deduped_timeline: list[TimelineEvent] = []
+            seen_keys: set[tuple[str, str, str]] = set()
+            for event in current_timeline:
+                key = (event.timestamp, event.event, event.source)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                deduped_timeline.append(event)
+
+            current_timeline = deduped_timeline
             if is_multi:
                 for event in current_timeline:
                     event.event = f"[{confirmation_code}] {event.event}"
@@ -539,13 +575,31 @@ class GetSessionTimelineTool(BaseTool):
         if len(serialized) <= max_chars:
             return timeline, False
 
+        priority_events = [
+            event
+            for event in timeline
+            if event.source in {"session-log", "chat"}
+            or any(term in event.event.lower() for term in _TIMELINE_PRIORITY_TERMS)
+        ]
+        remaining_events = [event for event in timeline if event not in priority_events]
+        prioritized_timeline: list[TimelineEvent] = []
+        seen_event_keys: set[tuple[str, str, str]] = set()
+        for event in [*priority_events, *remaining_events]:
+            key = (event.timestamp, event.event, event.source)
+            if key in seen_event_keys:
+                continue
+            seen_event_keys.add(key)
+            prioritized_timeline.append(event)
+
         truncated_timeline: list[TimelineEvent] = []
         current_chars = 0
-        for event in timeline:
+        for event in prioritized_timeline:
             event_json = event.model_dump_json()
             if current_chars + len(event_json) > max_chars:
                 break
             truncated_timeline.append(event)
             current_chars += len(event_json)
+
+        truncated_timeline.sort(key=lambda event: event.timestamp)
 
         return truncated_timeline, True

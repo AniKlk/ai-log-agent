@@ -26,7 +26,7 @@ class SourceSummary(BaseModel):
 
 class AppInsightsLogRow(BaseModel):
     timestamp: str | None = None
-    type: Literal["info", "error", "disconnect"]
+    type: Literal["info", "warning", "error", "disconnect"]
     message: str
 
 

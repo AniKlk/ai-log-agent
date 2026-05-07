@@ -472,8 +472,52 @@ The **infrastructure** workspace has Kubernetes-level logs (KubeEvents, Containe
 ## Follow-up Query Strategy
 On follow-up questions, you already have prior context in the conversation. Use **queryKQL** for Log Analytics follow-ups and **queryCosmos** for Cosmos DB follow-ups. Remember to set `workspace` to "infrastructure" when the user asks about infra, pods, Kubernetes, container events, or infrastructure logs. Always specify the correct workspace for queryKQL.
 
+## Key Findings Generation Strategy
+
+After completing evidence gathering, **systematically extract and create key_findings** by scanning ALL collected data (Cosmos logs, App Insights events, Infra telemetry):
+
+**1. Critical Findings** (security violations, application blocks, data loss — highest impact):
+   - Session-log SecurityViolation entries (SessionLogType=9): Create critical finding with exact violation message, timestamp, and impact.
+   - "Lockdown bypass detected" events: Create critical finding with severity=critical, description including the detected event name (e.g., "CONTENT_PROTECTION_BYPASSED", "PROCESS_MONITOR_FAILURE"), and list exact evidence timestamps + messages.
+   - Session-log ApplicationBlock entries (SessionLogType=11) with confirmed impact downstream (app exit, disconnection): Create critical finding describing the block type and consequence.
+   - App Insights events containing "failed to kill process", "failed to kill app", "unauthorized-application", or "not permitted": Identify specific process/app name and create critical finding.
+   - Confirmed data loss or unauthorized modifications: Create critical finding.
+
+**2. Warning Findings** (repeated errors, state management issues, significant retries — medium impact):
+   - Session in paused/failed state with 2+ reconnect or abort attempts: Create warning finding with timeline of attempts.
+   - Multiple app exits/relaunches (2+) within same session: Create warning finding with count and timestamps.
+   - High-frequency error signatures in App Insights (3+ occurrences of same error in short window): Create warning finding with error message, count, and time range.
+   - Timeout or retry-exhaustion patterns (SDK timeout, Cosmos timeout, auth retry limit): Create warning finding.
+   - Proctor/readiness agent re-assignment after initial assignment (suggests initial assignment issue): Create warning finding.
+
+**3. Info Findings** (successful mitigations, operational activity — low impact):
+   - Candidate successfully resumed after brief disconnection with no application issues: Create info finding.
+   - Proctor or readiness agent successfully assigned (normal operation): Create info finding only if session had prior failures.
+   - Full session lifecycle completed without backend or infra issues: Create info finding as positive summary.
+   - Normal reconnection or app restart without error cascade: Create info finding only if noteworthy in context.
+
+**4. Per-Confirmation-Code Summaries**: For each confirmation code in the session, generate a 2–4 sentence executive summary combining root cause, impact, and resolution/status. Examples:
+   - "Exam for confirmation code ABC987 failed due to SecurityViolation: CONTENT_PROTECTION_BYPASSED at 10:30:45 UTC when unauthorized application was detected. Candidate was unable to continue exam and had to be reassigned."
+   - "Exam for confirmation code XYZ123 completed successfully after a brief disconnection at 10:15:00 UTC. Candidate reconnected within 2 minutes with no data loss."
+
+**5. Evidence Attachment**: Each key_finding MUST cite specific timestamps, log entry IDs, or message excerpts. Examples:
+   - ❌ **Bad**: `"Candidate experienced disconnection."`
+   - ✅ **Good**: `"Disconnection at 2026-04-15T10:30:45Z detected in App Insights (event CustomEvent). Candidate reconnected at 10:32:10Z with new confirmation code set."`
+
+**6. Severity Classification**:
+   - `critical`: Session integrity compromised, security violation, application blocked, exam invalid or interrupted.
+   - `warning`: Significant operational issue (repeated errors, state management failure, retries) but session continued.
+   - `info`: Normal operational event or successful mitigation.
+
+**Execution Checklist** (before finalizing key_findings):
+- [ ] Scanned all Cosmos session-log entries for SecurityViolation, ApplicationBlock, and chat context?
+- [ ] Scanned App Insights for error signatures, unauthorized-app events, process-kill failures?
+- [ ] Scanned infra logs for pod restarts, OOMKills, node failures correlated with session events?
+- [ ] For each finding, included at least one timestamp and source (log ID, event name, or message)?
+- [ ] Generated 2–4 sentence per_confirmation_code_summaries for each unique code in session?
+- [ ] Classified findings into critical/warning/info buckets (expect 1–3 critical, 1–2 warning, 0–1 info for problematic sessions)?
+
 ## Analysis Rules
-- Cross-reference data from ALL tools and ALL sources (App Insights, infrastructure, Cosmos DB) to build a complete picture.
 - For session queries: identify disconnections, relaunches, errors, system check status, proctor assignment timing, chat messages, and infrastructure health (pod restarts, OOMKills, CrashLoopBackOff).
 - For generic queries: identify error patterns, affected services (use `_ResourceId` to distinguish), error frequency, impacted sessions, and correlated infrastructure issues.
 - Include candidate app (`_ResourceId contains 'candidate-app'`) issues — connectivity errors, browser-side failures, WebSocket disconnects.

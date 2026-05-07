@@ -23,7 +23,7 @@ from app.agent.investigation_policy import (
 # Roughly 80% of a 128k-token context window at 4 chars/token.
 _CONTEXT_BUDGET_CHARS = 400_000
 from app.agent.prompt import SYSTEM_PROMPT
-from app.agent.types import AgentOutput, Finding
+from app.agent.types import AppInsightsLogRow, AppInsightsSummary, AgentOutput, Finding, TimelineEntry
 from app.config import Settings
 from app.tools.registry import ToolRegistry
 
@@ -48,6 +48,38 @@ _APP_INSIGHTS_MARKER_PATTERNS = (
     "candidate-app security marker",
     "app-insights exit marker rollup",
     "app-insights login marker rollup",
+)
+_APP_INSIGHTS_SECURITY_PATTERNS = (
+    "content protection bypassed",
+    "lockdown bypass detected",
+    "candidate-app security marker",
+    "failed to kill process",
+    "failed to kill app",
+    "failed to kill",
+    "unauthorized application",
+    "unauthorised application",
+    "unauthorized app",
+    "unauthorised app",
+)
+_APP_INSIGHTS_EXIT_PATTERNS = (
+    "candidate-app exit marker",
+    "candidate exited",
+    "candidate exit",
+    "exiting application",
+    "exiting app",
+    "quit app",
+    "close app",
+    "exit lockdown window",
+    "ipc server action received: exit",
+)
+_APP_INSIGHTS_LOGIN_PATTERNS = (
+    "candidate-app login marker",
+    "set confirmation code",
+    "confirmation code set",
+    "logged into application",
+    "candidate launched",
+    "launch",
+    "launched",
 )
 _MAX_APP_INSIGHTS_VISIBILITY_LOGS = 300
 _FAILED_KILL_PROCESS_REGEX = re.compile(
@@ -89,6 +121,7 @@ class AgentOrchestrator:
         state = build_conversation_state(conversation_history)
         discovered_confirmation_codes = set(_CONFIRMATION_CODE_REGEX.findall(query))
         app_insights_exit_evidence: list[str] = []
+        security_event_evidence: list[str] = []
         app_insights_logs: list[dict[str, str | None]] = []
         app_insights_summary: dict[str, object] | None = None
         blocked_process_names: list[str] = []
@@ -160,6 +193,9 @@ class AgentOrchestrator:
                     )
                     app_insights_exit_evidence.extend(
                         self._extract_app_insights_exit_evidence(tool_name, result_content)
+                    )
+                    security_event_evidence.extend(
+                        self._extract_security_event_evidence(tool_name, result_content)
                     )
                     blocked_process_names = self._merge_blocked_process_names(
                         blocked_process_names,
@@ -243,12 +279,13 @@ class AgentOrchestrator:
                         }
                     )
                     continue
-                output = self._parse_output(choice.message.content, tools_invoked)
+                output = await self._ensure_valid_output(choice.message.content, tools_invoked, request_id)
                 output.confirmation_codes = self._merge_confirmation_codes(
                     output,
                     discovered_confirmation_codes,
                 )
                 self._apply_app_insights_visibility(output, app_insights_logs, app_insights_summary)
+                self._apply_security_event_safeguard(output, security_event_evidence)
                 self._apply_blocked_process_context(output, blocked_process_names)
                 self._apply_exit_marker_consistency_safeguard(output, app_insights_exit_evidence)
                 self._enforce_answer_style(output)
@@ -271,12 +308,13 @@ class AgentOrchestrator:
                             }
                         )
                         continue
-                    output = self._parse_output(choice.message.content, tools_invoked)
+                    output = await self._ensure_valid_output(choice.message.content, tools_invoked, request_id)
                     output.confirmation_codes = self._merge_confirmation_codes(
                         output,
                         discovered_confirmation_codes,
                     )
                     self._apply_app_insights_visibility(output, app_insights_logs, app_insights_summary)
+                    self._apply_security_event_safeguard(output, security_event_evidence)
                     self._apply_blocked_process_context(output, blocked_process_names)
                     self._apply_exit_marker_consistency_safeguard(
                         output,
@@ -428,6 +466,65 @@ class AgentOrchestrator:
                 tools_invoked=tools_invoked,
                 warnings=[f"Output parsing failed: {type(e).__name__}"],
             )
+
+    async def _ensure_valid_output(
+        self,
+        content: str,
+        tools_invoked: list[str],
+        request_id: str,
+    ) -> AgentOutput:
+        """Parse the LLM final output. If it isn't valid JSON, make a dedicated
+        no-tools secondary call with response_format=json_object to reformat it."""
+        output = self._parse_output(content, tools_invoked)
+        parse_failed = output.warnings and any(
+            "Output parsing failed" in (w or "") for w in output.warnings
+        )
+        if not parse_failed:
+            return output
+
+        logger.info(
+            "Attempting JSON reformat via secondary LLM call",
+            extra={"request_id": request_id},
+        )
+        try:
+            reformat_messages: list[ChatCompletionMessageParam] = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a JSON formatter. Convert analysis text into valid JSON with COMPLETE fidelity. "
+                        "CRITICAL requirements:\n"
+                        "1. Preserve EVERY field: summary, root_cause, root_cause_confidence, timeline, key_findings, "
+                        "confirmation_codes, per_confirmation_code_summaries, per_confirmation_code_source_summary, "
+                        "download_links, source_summary, tools_invoked, warnings, app_insights_logs, app_insights_summary.\n"
+                        "2. Do NOT simplify or combine findings — preserve all findings with full severity, description, and evidence.\n"
+                        "3. Preserve all timeline entries with timestamps, events, and severity.\n"
+                        "4. For per_confirmation_code_summaries, generate detailed 2-5 sentence summaries per code.\n"
+                        "5. Return ONLY the JSON object — no markdown, no explanation, no extra text.\n"
+                        "6. Ensure all arrays (timeline, key_findings, confirmation_codes, evidence) are complete and not truncated."
+                    ),
+                },
+                {"role": "user", "content": content},
+            ]
+            resp = await self._client.chat.completions.create(
+                model=self._settings.AZURE_OPENAI_DEPLOYMENT,
+                messages=reformat_messages,
+                temperature=0,
+                response_format={"type": "json_object"},
+            )
+            reformatted = (resp.choices[0].message.content or "").strip()
+            output = self._parse_output(reformatted, tools_invoked)
+            # Remove the parse-failed warning if reformat succeeded
+            if output.warnings:
+                output.warnings = [
+                    w for w in output.warnings if "Output parsing failed" not in (w or "")
+                ]
+        except Exception as reformat_err:
+            logger.warning(
+                "JSON reformat call failed: %s",
+                reformat_err,
+                extra={"request_id": request_id},
+            )
+        return output
 
     @staticmethod
     def _merge_confirmation_codes(output: AgentOutput, discovered_codes: set[str]) -> list[str]:
@@ -600,6 +697,62 @@ class AgentOrchestrator:
                     evidence.append(snippet)
 
     @classmethod
+    def _collect_security_evidence_from_node(
+        cls,
+        node: object,
+        evidence: list[str],
+        seen: set[str],
+    ) -> None:
+        if isinstance(node, dict):
+            msg = cls._normalize_text(
+                node.get("message")
+                or node.get("event")
+                or node.get("name")
+                or node.get("Metadata")
+            )
+            timestamp = cls._normalize_text(
+                node.get("timestamp") or node.get("time") or node.get("Timestamp")
+            )
+            msg_lower = msg.lower()
+            if "lockdown bypass detected" in msg_lower or "content protection bypassed" in msg_lower:
+                snippet = f"[{timestamp}] {msg}".strip() if timestamp else msg
+                if snippet and snippet not in seen:
+                    seen.add(snippet)
+                    evidence.append(snippet[:320])
+
+            for value in node.values():
+                cls._collect_security_evidence_from_node(value, evidence, seen)
+            return
+
+        if isinstance(node, list):
+            for item in node:
+                cls._collect_security_evidence_from_node(item, evidence, seen)
+            return
+
+        if isinstance(node, str):
+            msg_lower = node.lower()
+            if "lockdown bypass detected" in msg_lower or "content protection bypassed" in msg_lower:
+                snippet = node.strip()[:320]
+                if snippet and snippet not in seen:
+                    seen.add(snippet)
+                    evidence.append(snippet)
+
+    @classmethod
+    def _extract_security_event_evidence(cls, tool_name: str, result_content: str) -> list[str]:
+        if tool_name not in {"getSessionData", "getSessionTimeline", "queryCosmos"}:
+            return []
+
+        try:
+            payload = json.loads(result_content)
+        except Exception:
+            return []
+
+        evidence: list[str] = []
+        seen: set[str] = set()
+        cls._collect_security_evidence_from_node(payload, evidence, seen)
+        return evidence
+
+    @classmethod
     def _extract_app_insights_exit_evidence(cls, tool_name: str, result_content: str) -> list[str]:
         if tool_name not in {
             "getSessionData",
@@ -625,7 +778,7 @@ class AgentOrchestrator:
         tool_name: str,
         result_content: str,
     ) -> tuple[list[dict[str, str | None]], dict[str, object] | None]:
-        if tool_name != "getSessionData":
+        if tool_name not in {"getSessionData", "getSessionTimeline"}:
             return [], None
 
         try:
@@ -635,6 +788,73 @@ class AgentOrchestrator:
 
         if not isinstance(payload, dict):
             return [], None
+
+        if tool_name == "getSessionTimeline":
+            timeline = payload.get("timeline") or []
+            if not isinstance(timeline, list):
+                return [], None
+
+            logs: list[dict[str, str | None]] = []
+            info_events = 0
+            error_events = 0
+            disconnect_events = 0
+            marker_events = 0
+
+            for entry in timeline:
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("source") or "").lower() != "system":
+                    continue
+
+                message = str(entry.get("event") or "").strip()
+                if not message:
+                    continue
+
+                lowered = message.lower()
+                if not any(
+                    pattern in lowered
+                    for pattern in (
+                        *_APP_INSIGHTS_MARKER_PATTERNS,
+                        *_APP_INSIGHTS_SECURITY_PATTERNS,
+                        *_APP_INSIGHTS_EXIT_PATTERNS,
+                        *_APP_INSIGHTS_LOGIN_PATTERNS,
+                    )
+                ):
+                    continue
+
+                if any(pattern in lowered for pattern in _APP_INSIGHTS_SECURITY_PATTERNS):
+                    type_value = "warning"
+                    disconnect_events += 1
+                elif any(pattern in lowered for pattern in _APP_INSIGHTS_EXIT_PATTERNS):
+                    type_value = "disconnect"
+                    disconnect_events += 1
+                else:
+                    type_value = "info"
+                    info_events += 1
+
+                logs.append(
+                    {
+                        "timestamp": str(entry.get("timestamp")) if entry.get("timestamp") else None,
+                        "type": type_value,
+                        "message": message,
+                    }
+                )
+
+                if any(marker in lowered for marker in _APP_INSIGHTS_MARKER_PATTERNS):
+                    marker_events += 1
+
+            logs = AgentOrchestrator._prioritize_app_insights_logs(logs)
+            summary = {
+                "total_events": len(logs),
+                "info_events": info_events,
+                "error_events": error_events,
+                "disconnect_events": disconnect_events,
+                "marker_events": marker_events,
+                "non_marker_events": max(len(logs) - marker_events, 0),
+                "error_records": 0,
+                "top_error_signatures": [],
+            }
+            return logs[:_MAX_APP_INSIGHTS_VISIBILITY_LOGS], summary
 
         events = payload.get("events") or []
         errors = payload.get("errors") or []
@@ -696,16 +916,7 @@ class AgentOrchestrator:
             if len(top_error_signatures) >= 5:
                 break
 
-        logs.sort(
-            key=lambda row: (
-                0 if row.get("type") == "error" else 1,
-                0
-                if not any(marker in str(row.get("message", "")).lower() for marker in _APP_INSIGHTS_MARKER_PATTERNS)
-                else 1,
-                str(row.get("timestamp") or ""),
-            ),
-            reverse=True,
-        )
+        logs = AgentOrchestrator._prioritize_app_insights_logs(logs)
 
         summary = {
             "total_events": len(logs),
@@ -733,17 +944,37 @@ class AgentOrchestrator:
                 continue
             seen.add(key)
             merged.append(row)
-        merged.sort(
-            key=lambda row: (
-                0 if row.get("type") == "error" else 1,
-                0
-                if not any(marker in str(row.get("message", "")).lower() for marker in _APP_INSIGHTS_MARKER_PATTERNS)
-                else 1,
-                str(row.get("timestamp") or ""),
-            ),
-            reverse=True,
-        )
+        merged = AgentOrchestrator._prioritize_app_insights_logs(merged)
         return merged[:_MAX_APP_INSIGHTS_VISIBILITY_LOGS]
+
+    @classmethod
+    def _prioritize_app_insights_logs(
+        cls,
+        rows: list[dict[str, str | None]],
+    ) -> list[dict[str, str | None]]:
+        """Sort App Insights logs so security and lifecycle story signals stay visible."""
+        prioritized = list(rows)
+        # Reverse chronological (newest first)
+        prioritized.sort(key=lambda row: str(row.get("timestamp") or ""), reverse=True)
+        prioritized.sort(key=cls._app_insights_row_priority)
+        return prioritized
+
+    @staticmethod
+    def _app_insights_row_priority(row: dict[str, str | None]) -> int:
+        message = str(row.get("message") or "").lower()
+        row_type = str(row.get("type") or "info").lower()
+
+        if any(pattern in message for pattern in _APP_INSIGHTS_SECURITY_PATTERNS):
+            return 0
+        if any(pattern in message for pattern in _APP_INSIGHTS_EXIT_PATTERNS):
+            return 1
+        if any(pattern in message for pattern in _APP_INSIGHTS_LOGIN_PATTERNS):
+            return 2
+        if row_type == "error":
+            return 3
+        if row_type == "disconnect":
+            return 4
+        return 5
 
     @staticmethod
     def _merge_app_insights_summary(
@@ -772,16 +1003,291 @@ class AgentOrchestrator:
         merged["top_error_signatures"] = merged_errors
         return merged
 
-    @staticmethod
+    @classmethod
     def _apply_app_insights_visibility(
+        cls,
         output: AgentOutput,
         logs: list[dict[str, str | None]],
         summary: dict[str, object] | None,
     ) -> None:
+        typed_logs: list[AppInsightsLogRow] = []
         if logs:
-            output.app_insights_logs = logs
+            for row in logs:
+                try:
+                    typed_logs.append(
+                        AppInsightsLogRow(
+                            timestamp=row.get("timestamp"),
+                            type=str(row.get("type") or "info"),
+                            message=str(row.get("message") or ""),
+                        )
+                    )
+                except Exception:
+                    continue
+            if typed_logs:
+                output.app_insights_logs = typed_logs
+
         if summary:
-            output.app_insights_summary = summary  # type: ignore[assignment]
+            try:
+                output.app_insights_summary = AppInsightsSummary.model_validate(summary)
+            except Exception:
+                pass
+
+        # Only synthesize timeline if the LLM output has no timeline AND no proper findings.
+        # This preserves Cosmos-sourced timelines and prevents App Insights errors from
+        # replacing well-structured Cosmos session data.
+        has_proper_timeline = bool(output.timeline)
+        has_proper_findings = bool(output.key_findings)
+
+        if logs and not has_proper_timeline and not has_proper_findings:
+            # Only synthesize if both timeline AND findings are missing — indicates true parse failure
+            synthesized_timeline: list[TimelineEntry] = []
+            for row in logs[:40]:
+                message = str(row.get("message") or "").strip()
+                if not message:
+                    continue
+                row_type = str(row.get("type") or "info").lower()
+                severity = "critical" if row_type == "error" else ("warning" if row_type == "warning" else "info")
+                synthesized_timeline.append(
+                    TimelineEntry(
+                        timestamp=row.get("timestamp"),
+                        event=message,
+                        severity=severity,
+                    )
+                )
+            if synthesized_timeline:
+                output.timeline = synthesized_timeline
+
+        if summary and not has_proper_findings:
+            total_events = int(summary.get("total_events", 0) or 0)
+            error_events = int(summary.get("error_events", 0) or 0)
+            non_marker_events = int(summary.get("non_marker_events", 0) or 0)
+            marker_events = int(summary.get("marker_events", 0) or 0)
+            top_errors = [str(item) for item in summary.get("top_error_signatures", []) or []]
+
+            synthesized_findings: list[Finding] = [
+                Finding(
+                    description=(
+                        "App Insights captured a high volume of diagnostic telemetry beyond lifecycle markers."
+                    ),
+                    severity="warning" if error_events > 0 else "info",
+                    evidence=[
+                        f"total_events={total_events}",
+                        f"error_events={error_events}",
+                        f"non_marker_events={non_marker_events}",
+                        f"marker_events={marker_events}",
+                    ],
+                )
+            ]
+            if top_errors:
+                synthesized_findings.append(
+                    Finding(
+                        description="Top App Insights error signatures observed during investigation.",
+                        severity="warning",
+                        evidence=top_errors[:5],
+                    )
+                )
+            output.key_findings = synthesized_findings
+
+        if typed_logs:
+            cls._merge_app_insights_story_into_timeline(output, typed_logs)
+            cls._inject_app_insights_story_findings(output, typed_logs)
+
+        cls._backfill_confirmation_code_summaries(output)
+
+    @staticmethod
+    def _normalize_story_message(message: str) -> str:
+        cleaned = re.sub(
+            r"^candidate-app (?:login|exit|security) marker(?: \([^)]+\))?:\s*",
+            "",
+            message,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(
+            r"^app-insights (?:login|exit) marker rollup:\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"^\[SEVERITY=[^\]]+\]\s*", "", cleaned, flags=re.IGNORECASE)
+        return cleaned.strip()
+
+    @staticmethod
+    def _format_story_evidence(timestamp: str | None, message: str) -> str:
+        cleaned = AgentOrchestrator._normalize_story_message(message)
+        if timestamp:
+            return f"[{timestamp}] {cleaned}"
+        return cleaned
+
+    @staticmethod
+    def _app_insights_story_kind(message: str) -> str | None:
+        lowered = message.lower()
+        if any(pattern in lowered for pattern in _APP_INSIGHTS_SECURITY_PATTERNS):
+            return "security"
+        if any(pattern in lowered for pattern in _APP_INSIGHTS_EXIT_PATTERNS):
+            return "exit"
+        if any(pattern in lowered for pattern in _APP_INSIGHTS_LOGIN_PATTERNS):
+            return "login"
+        return None
+
+    @classmethod
+    def _merge_app_insights_story_into_timeline(
+        cls,
+        output: AgentOutput,
+        logs: list[AppInsightsLogRow],
+    ) -> None:
+        existing_keys = {
+            ((entry.timestamp or ""), cls._normalize_story_message(entry.event).lower())
+            for entry in output.timeline
+        }
+        merged_timeline = list(output.timeline)
+
+        for row in logs:
+            kind = cls._app_insights_story_kind(row.message)
+            if kind is None:
+                continue
+
+            event = cls._normalize_story_message(row.message)
+            key = ((row.timestamp or ""), event.lower())
+            if key in existing_keys:
+                continue
+
+            severity = "critical" if kind == "security" else ("warning" if kind == "exit" else "info")
+            merged_timeline.append(
+                TimelineEntry(
+                    timestamp=row.timestamp,
+                    event=event,
+                    severity=severity,
+                )
+            )
+            existing_keys.add(key)
+
+        merged_timeline.sort(key=lambda entry: (entry.timestamp is None, entry.timestamp or ""))
+        output.timeline = merged_timeline
+
+    @classmethod
+    def _inject_app_insights_story_findings(
+        cls,
+        output: AgentOutput,
+        logs: list[AppInsightsLogRow],
+    ) -> None:
+        security_rows = [row for row in logs if cls._app_insights_story_kind(row.message) == "security"]
+        exit_rows = [row for row in logs if cls._app_insights_story_kind(row.message) == "exit"]
+        login_rows = [row for row in logs if cls._app_insights_story_kind(row.message) == "login"]
+
+        existing_finding_text = " ".join(
+            [finding.description for finding in output.key_findings]
+            + [evidence for finding in output.key_findings for evidence in finding.evidence]
+        ).lower()
+
+        if security_rows and not any(
+            marker in existing_finding_text
+            for marker in ("content protection bypassed", "lockdown bypass detected")
+        ):
+            primary_security = cls._normalize_story_message(security_rows[0].message)
+            output.key_findings.insert(
+                0,
+                Finding(
+                    description=(
+                        f"A critical security violation occurred: '{primary_security}' was found in candidate-app telemetry."
+                    ),
+                    severity="critical",
+                    evidence=[
+                        cls._format_story_evidence(row.timestamp, row.message)
+                        for row in security_rows[:3]
+                    ],
+                ),
+            )
+
+        repeated_exit_present = (
+            "relaunch" in existing_finding_text
+            or "repeated application exits" in existing_finding_text
+            or "candidate exited the app" in existing_finding_text
+        )
+        if len(exit_rows) >= 2 and not repeated_exit_present:
+            evidence_rows = [
+                *exit_rows[:3],
+                *login_rows[:2],
+            ]
+            deduped_evidence = list(
+                dict.fromkeys(
+                    cls._format_story_evidence(row.timestamp, row.message)
+                    for row in evidence_rows
+                )
+            )
+            output.key_findings.append(
+                Finding(
+                    description=(
+                        "The candidate exited and relaunched the application multiple times, based on combined Cosmos and App Insights lifecycle evidence."
+                    ),
+                    severity="warning",
+                    evidence=deduped_evidence[:5],
+                )
+            )
+
+        if security_rows:
+            security_text = cls._normalize_story_message(security_rows[0].message)
+            if security_text.lower() not in (output.summary or "").lower():
+                output.summary = (
+                    output.summary.rstrip()
+                    + f" A critical security event was found in App Insights: {security_text}."
+                ).strip()
+            if output.root_cause and security_text.lower() not in output.root_cause.lower():
+                output.root_cause = (
+                    output.root_cause.rstrip()
+                    + f" App Insights confirmed the security event: {security_text}."
+                )
+
+    @classmethod
+    def _backfill_confirmation_code_summaries(cls, output: AgentOutput) -> None:
+        codes = output.confirmation_codes or list(output.per_confirmation_code_source_summary.keys())
+        if not codes:
+            return
+
+        normalized_timeline = [
+            (entry.timestamp, cls._normalize_story_message(entry.event), (entry.severity or "info"))
+            for entry in output.timeline
+        ]
+        security_events = [event for _, event, _ in normalized_timeline if cls._app_insights_story_kind(event) == "security"]
+        exit_events = [event for _, event, _ in normalized_timeline if cls._app_insights_story_kind(event) == "exit"]
+        login_events = [event for _, event, _ in normalized_timeline if cls._app_insights_story_kind(event) == "login"]
+        paused_present = any("paused" in event.lower() for _, event, _ in normalized_timeline)
+        resumed_present = any("resume" in event.lower() for _, event, _ in normalized_timeline)
+
+        summary_parts: list[str] = []
+        if security_events:
+            summary_parts.append(
+                f"This session included a critical security event: {security_events[0]}."
+            )
+        if exit_events or login_events:
+            summary_parts.append(
+                "Combined Cosmos and App Insights lifecycle evidence shows "
+                f"{len(exit_events)} app exit event(s) and {len(login_events)} app launch/login event(s)."
+            )
+        if paused_present:
+            summary_parts.append(
+                "The exam also entered a paused state that required the candidate to exit and log back in."
+            )
+        elif resumed_present and (exit_events or login_events):
+            summary_parts.append(
+                "The candidate was able to relaunch and continue after the interruptions."
+            )
+
+        fallback_summary = " ".join(summary_parts).strip()
+        if not fallback_summary:
+            fallback_summary = output.summary.strip()
+
+        output.per_confirmation_code_summaries = {
+            **{
+                code: summary
+                for code, summary in output.per_confirmation_code_summaries.items()
+                if summary and summary.strip()
+            },
+            **{
+                code: output.per_confirmation_code_summaries.get(code, fallback_summary)
+                for code in codes
+                if not output.per_confirmation_code_summaries.get(code, "").strip()
+            },
+        }
 
     @classmethod
     def _extract_blocked_process_names(cls, result_content: str) -> list[str]:
@@ -900,6 +1406,58 @@ class AgentOrchestrator:
                 else warning
                 for warning in output.warnings
             ]
+
+    @classmethod
+    def _apply_security_event_safeguard(
+        cls,
+        output: AgentOutput,
+        evidence: list[str],
+    ) -> None:
+        if not evidence:
+            return
+
+        existing_text = " ".join(
+            [output.summary or "", output.root_cause or ""]
+            + [entry.event for entry in output.timeline]
+            + [finding.description for finding in output.key_findings]
+            + [ev for finding in output.key_findings for ev in finding.evidence]
+        ).lower()
+
+        security_event_text = evidence[0]
+        normalized_event = re.sub(r"^\[[^\]]+\]\s*", "", security_event_text).strip()
+
+        if "lockdown bypass detected" not in existing_text and "content protection bypassed" not in existing_text:
+            output.timeline.insert(
+                0,
+                TimelineEntry(
+                    timestamp=re.search(r"^\[([^\]]+)\]", security_event_text).group(1)
+                    if re.search(r"^\[([^\]]+)\]", security_event_text)
+                    else None,
+                    event=normalized_event,
+                    severity="critical",
+                ),
+            )
+
+        if not any(
+            "lockdown bypass" in finding.description.lower() or "content protection" in finding.description.lower()
+            for finding in output.key_findings
+        ):
+            output.key_findings.insert(
+                0,
+                Finding(
+                    description=(
+                        f"A critical security violation occurred: {normalized_event}."
+                    ),
+                    severity="critical",
+                    evidence=evidence[:3],
+                ),
+            )
+
+        if normalized_event.lower() not in (output.summary or "").lower():
+            output.summary = (output.summary.rstrip() + f" Critical security event: {normalized_event}.").strip()
+
+        if output.root_cause and normalized_event.lower() not in output.root_cause.lower():
+            output.root_cause = (output.root_cause.rstrip() + f" Security event observed: {normalized_event}.").strip()
 
     @staticmethod
     def _detect_export_formats(query: str) -> set[str]:

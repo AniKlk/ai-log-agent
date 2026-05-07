@@ -292,29 +292,67 @@ export function AnalysisResult({
     }
 
     if (appInsightsSummary) {
-      const appInsightsSummaryData: (string | number)[][] = [
-        ['Metric', 'Value'],
-        ['Total Events', appInsightsSummary.total_events],
-        ['Info Events', appInsightsSummary.info_events],
-        ['Error Events', appInsightsSummary.error_events],
-        ['Disconnect Events', appInsightsSummary.disconnect_events],
-        ['Marker Events', appInsightsSummary.marker_events],
-        ['Non-marker Events', appInsightsSummary.non_marker_events],
-        ['Error Records', appInsightsSummary.error_records],
-      ];
-      const appInsightsSummarySheet = XLSX.utils.aoa_to_sheet(appInsightsSummaryData);
-      appInsightsSummarySheet['!cols'] = [{ wch: 32 }, { wch: 20 }];
-      XLSX.utils.book_append_sheet(wb, appInsightsSummarySheet, 'App Insights Summary');
+      if (y > 240) { doc.addPage(); y = 20; }
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('App Insights Summary', 14, y);
+      y += 4;
+
+      autoTable(doc, {
+        startY: y,
+        head: [['Metric', 'Value']],
+        body: [
+          ['Total Events', String(appInsightsSummary.total_events)],
+          ['Info Events', String(appInsightsSummary.info_events)],
+          ['Error Events', String(appInsightsSummary.error_events)],
+          ['Disconnect Events', String(appInsightsSummary.disconnect_events)],
+          ['Marker Events', String(appInsightsSummary.marker_events)],
+          ['Non-marker Events', String(appInsightsSummary.non_marker_events)],
+          ['Error Records', String(appInsightsSummary.error_records)],
+        ],
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [0, 133, 95] },
+      });
+      y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
+
+      if (appInsightsSummary.top_error_signatures.length > 0) {
+        if (y > 240) { doc.addPage(); y = 20; }
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Top App Insights Error Signatures', 14, y);
+        y += 4;
+
+        autoTable(doc, {
+          startY: y,
+          head: [['Error Signature']],
+          body: appInsightsSummary.top_error_signatures.map((signature) => [signature]),
+          styles: { fontSize: 8 },
+          headStyles: { fillColor: [0, 133, 95] },
+        });
+        y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
+      }
     }
 
     if (appInsightsLogs.length > 0) {
-      const appInsightsLogData: (string | number | null)[][] = [
-        ['Timestamp', 'Type', 'Message'],
-        ...appInsightsLogs.map((row) => [row.timestamp, row.type, row.message]),
-      ];
-      const appInsightsLogSheet = XLSX.utils.aoa_to_sheet(appInsightsLogData);
-      appInsightsLogSheet['!cols'] = [{ wch: 28 }, { wch: 14 }, { wch: 120 }];
-      XLSX.utils.book_append_sheet(wb, appInsightsLogSheet, 'App Insights Logs');
+      if (y > 240) { doc.addPage(); y = 20; }
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('App Insights Logs', 14, y);
+      y += 4;
+
+      autoTable(doc, {
+        startY: y,
+        head: [['Timestamp', 'Type', 'Message']],
+        body: appInsightsLogs.map((row) => [row.timestamp || 'N/A', row.type, row.message]),
+        styles: { fontSize: 8, cellWidth: 'wrap' },
+        columnStyles: {
+          0: { cellWidth: 34 },
+          1: { cellWidth: 18 },
+          2: { cellWidth: 'auto' },
+        },
+        headStyles: { fillColor: [0, 133, 95] },
+      });
+      y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
     }
 
     // Footer

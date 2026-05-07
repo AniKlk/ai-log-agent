@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from azure.cosmos.aio import CosmosClient
 from pydantic import BaseModel
 
-from app.tools._cosmos_helpers import normalize_timestamp, resolve_exam_session_id
+from app.tools._cosmos_helpers import normalize_timestamp, resolve_exam_sessions
 from app.tools.base import BaseTool
 from app.tools.models import ChatHistoryInput, ChatHistoryOutput, ChatMessage
 
@@ -41,12 +41,16 @@ class GetChatHistoryTool(BaseTool):
         is_multi = len(confirmation_codes) > 1
 
         for confirmation_code in confirmation_codes:
-            # Resolve ConfirmationCode → ExamSessionId
+            # Resolve ConfirmationCode → all related ExamSessionIds
             try:
-                exam_session_id, _ = await resolve_exam_session_id(
+                session_refs = await resolve_exam_sessions(
                     self._cosmos_client, confirmation_code
                 )
             except ValueError:
+                logger.warning("No session found for %s", confirmation_code)
+                continue
+
+            if not session_refs:
                 logger.warning("No session found for %s", confirmation_code)
                 continue
 
@@ -54,30 +58,31 @@ class GetChatHistoryTool(BaseTool):
                 database = self._cosmos_client.get_database_client(_COSMOS_DATABASE)
                 container = database.get_container_client(_COSMOS_CHAT_CONTAINER)
 
-                query = "SELECT * FROM c WHERE c.ExamSessionId = @esid"
-                parameters: list[dict] = [{"name": "@esid", "value": exam_session_id}]
+                for exam_session_id, _ in session_refs:
+                    query = "SELECT * FROM c WHERE c.ExamSessionId = @esid"
+                    parameters: list[dict] = [{"name": "@esid", "value": exam_session_id}]
 
-                items = container.query_items(query=query, parameters=parameters)
-                async for item in items:
-                    # Document has a nested Entries array with chat messages
-                    entries = item.get("Entries") or []
-                    for entry in entries:
-                        ts = normalize_timestamp(entry.get("TimeStamp") or entry.get("Timestamp"))
-                        # Role: 0 = candidate, 1 = proctor
-                        role_val = entry.get("Role", 0)
-                        sender: str = "proctor" if role_val == 1 else "candidate"
-                        message_text = entry.get("Message", "")
-                        if not message_text:
-                            continue
-                        if is_multi:
-                            message_text = f"[{confirmation_code}] {message_text}"
-                        messages.append(
-                            ChatMessage(
-                                timestamp=ts,
-                                sender=sender,
-                                message=message_text,
+                    items = container.query_items(query=query, parameters=parameters)
+                    async for item in items:
+                        # Document has a nested Entries array with chat messages
+                        entries = item.get("Entries") or []
+                        for entry in entries:
+                            ts = normalize_timestamp(entry.get("TimeStamp") or entry.get("Timestamp"))
+                            # Role: 0 = candidate, 1 = proctor
+                            role_val = entry.get("Role", 0)
+                            sender: str = "proctor" if role_val == 1 else "candidate"
+                            message_text = entry.get("Message", "")
+                            if not message_text:
+                                continue
+                            if is_multi:
+                                message_text = f"[{confirmation_code}] {message_text}"
+                            messages.append(
+                                ChatMessage(
+                                    timestamp=ts,
+                                    sender=sender,
+                                    message=message_text,
+                                )
                             )
-                        )
             except Exception:
                 logger.exception("Cosmos DB chat query failed for %s", confirmation_code)
 
