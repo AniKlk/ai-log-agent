@@ -17,22 +17,15 @@ export default function Home() {
   const handleSubmit = async (query: string) => {
     setLoading(true);
     try {
-      // For follow-ups, include prior assistant response in history
-      let history = conversationHistory;
-      if (response) {
-        history = [
-          ...conversationHistory,
-          { role: 'assistant' as const, content: JSON.stringify(response.answer) },
-        ];
-      }
-
-      const res = await analyzeQuery(query, history.length > 0 ? history : undefined);
+      const history = conversationHistory.length > 0 ? conversationHistory : undefined;
+      const res = await analyzeQuery(query, history);
       setResponse(res);
 
-      // Accumulate history
+      // Accumulate ordered turns: user question -> assistant answer
       setConversationHistory([
-        ...history,
+        ...conversationHistory,
         { role: 'user' as const, content: query },
+        { role: 'assistant' as const, content: JSON.stringify(res.answer) },
       ]);
     } finally {
       setLoading(false);

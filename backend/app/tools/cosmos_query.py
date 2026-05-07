@@ -54,6 +54,29 @@ class QueryCosmosTool(BaseTool):
     def _sanitize_correlated_order_by(query: str) -> str:
         return _ORDER_BY_PATTERN.sub("", query).strip()
 
+    @staticmethod
+    def _rewrite_groupby_to_projection(query: str, max_items: int) -> str:
+        """Rewrite unsupported GROUP BY aggregate query into a projection query.
+
+        Example:
+        SELECT c.Status, COUNT(1) AS cnt FROM c WHERE ... GROUP BY c.Status
+        ->
+        SELECT TOP 500 c.Status FROM c WHERE ...
+        """
+        query_no_order = _ORDER_BY_PATTERN.sub("", query).strip()
+        upper = query_no_order.upper()
+        group_idx = upper.find(" GROUP BY ")
+        from_idx = upper.find(" FROM ")
+        if group_idx == -1 or from_idx == -1 or from_idx > group_idx:
+            return query
+
+        from_to_group = query_no_order[from_idx:group_idx].strip()
+        group_fields = query_no_order[group_idx + len(" GROUP BY ") :].strip()
+        if not group_fields:
+            return query
+
+        return f"SELECT TOP {max_items} {group_fields} {from_to_group}"
+
     async def execute(self, args: BaseModel) -> CosmosQueryOutput:
         assert isinstance(args, CosmosQueryInput)
 
@@ -126,6 +149,16 @@ class QueryCosmosTool(BaseTool):
                 if fallback_query != args.query:
                     logger.warning(
                         "Retrying Cosmos query without ORDER BY due to correlated collection limitation"
+                    )
+                    rows = await run_query(fallback_query)
+                else:
+                    logger.exception("Cosmos query execution failed")
+                    raise
+            elif "GroupBy NonValueAggregate" in err:
+                fallback_query = self._rewrite_groupby_to_projection(args.query, args.max_items)
+                if fallback_query != args.query:
+                    logger.warning(
+                        "Retrying Cosmos query without GROUP BY aggregate due to gateway/client limitation"
                     )
                     rows = await run_query(fallback_query)
                 else:

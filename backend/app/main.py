@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from azure.cosmos.aio import CosmosClient
-from azure.identity.aio import DefaultAzureCredential
+from azure.identity.aio import AzureCliCredential, ChainedTokenCredential, DefaultAzureCredential
 from azure.monitor.query.aio import LogsQueryClient
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +17,7 @@ from app.api.routes import router
 from app.config import Settings
 from app.tools.chat_history import GetChatHistoryTool
 from app.tools.cosmos_query import QueryCosmosTool
+from app.tools.exam_status_counts import GetExamStatusCountsTool
 from app.tools.kql import QueryKQLTool
 from app.tools.session_log_stats import GetSessionLogStatsTool
 from app.tools.registry import ToolRegistry
@@ -44,6 +45,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _configure_logging(settings.LOG_LEVEL)
 
     credential = DefaultAzureCredential()
+    openai_credential = ChainedTokenCredential(
+        AzureCliCredential(),
+        DefaultAzureCredential(exclude_azure_cli_credential=True),
+    )
 
     # --- Refreshing Azure AD token for OpenAI ---
     # Tokens expire after ~60 min; we cache and re-fetch when within 60 s of expiry.
@@ -52,7 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     async def _get_openai_token() -> str:
         if time.monotonic() >= _cached_token["expires_on"] - 60:
-            t = await credential.get_token(_OPENAI_SCOPE)
+            t = await openai_credential.get_token(_OPENAI_SCOPE)
             _cached_token["token"] = t.token
             _cached_token["expires_on"] = float(t.expires_on)
         return _cached_token["token"]
@@ -70,7 +75,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             raise RuntimeError("Sync auth not supported; use async client only")
 
     # Seed the cache now so the first request doesn't block under load
-    initial_token = await credential.get_token(_OPENAI_SCOPE)
+    initial_token = await openai_credential.get_token(_OPENAI_SCOPE)
     _cached_token["token"] = initial_token.token
     _cached_token["expires_on"] = float(initial_token.expires_on)
 
@@ -88,7 +93,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     cosmos_credential = settings.COSMOS_KEY if settings.COSMOS_KEY else credential
     cosmos_client = CosmosClient(url=settings.COSMOS_ENDPOINT, credential=cosmos_credential)
 
-    registry = ToolRegistry()
+    registry = ToolRegistry(
+        cacheable_tool_names=settings.tool_cacheable_name_list,
+        cache_ttl_seconds=settings.TOOL_CACHE_TTL_SECONDS,
+    )
     registry.register(
         GetSessionDataTool(
             logs_client,
@@ -110,6 +118,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         QueryKQLTool(logs_client, settings.PROPROCTOR_WORKSPACE_ID, settings.INFRA_WORKSPACE_ID)
     )
     registry.register(QueryCosmosTool(cosmos_client))
+    registry.register(GetExamStatusCountsTool(cosmos_client))
     registry.register(GetSessionLogStatsTool(cosmos_client))
 
     orchestrator = AgentOrchestrator(openai_client, registry, settings)
@@ -123,6 +132,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await logs_client.close()
     await cosmos_client.close()
+    await openai_credential.close()
     await credential.close()
     await openai_client.close()
     logger.info("Application shutdown — clients closed")

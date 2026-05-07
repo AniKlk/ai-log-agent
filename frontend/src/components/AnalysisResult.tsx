@@ -104,6 +104,8 @@ export function AnalysisResult({
   const perCodeSummaries = Object.entries(data.per_confirmation_code_source_summary || {});
   const perCodeExecutiveSummaries = Object.entries(data.per_confirmation_code_summaries || {});
   const confirmationCodes = collectConfirmationCodes(data);
+  const appInsightsLogs = data.app_insights_logs || [];
+  const appInsightsSummary = data.app_insights_summary || null;
 
   const synthesizedLifecycleDetails = new Set<string>();
   for (const warning of data.warnings || []) {
@@ -287,6 +289,32 @@ export function AnalysisResult({
         });
         y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
       }
+    }
+
+    if (appInsightsSummary) {
+      const appInsightsSummaryData: (string | number)[][] = [
+        ['Metric', 'Value'],
+        ['Total Events', appInsightsSummary.total_events],
+        ['Info Events', appInsightsSummary.info_events],
+        ['Error Events', appInsightsSummary.error_events],
+        ['Disconnect Events', appInsightsSummary.disconnect_events],
+        ['Marker Events', appInsightsSummary.marker_events],
+        ['Non-marker Events', appInsightsSummary.non_marker_events],
+        ['Error Records', appInsightsSummary.error_records],
+      ];
+      const appInsightsSummarySheet = XLSX.utils.aoa_to_sheet(appInsightsSummaryData);
+      appInsightsSummarySheet['!cols'] = [{ wch: 32 }, { wch: 20 }];
+      XLSX.utils.book_append_sheet(wb, appInsightsSummarySheet, 'App Insights Summary');
+    }
+
+    if (appInsightsLogs.length > 0) {
+      const appInsightsLogData: (string | number | null)[][] = [
+        ['Timestamp', 'Type', 'Message'],
+        ...appInsightsLogs.map((row) => [row.timestamp, row.type, row.message]),
+      ];
+      const appInsightsLogSheet = XLSX.utils.aoa_to_sheet(appInsightsLogData);
+      appInsightsLogSheet['!cols'] = [{ wch: 28 }, { wch: 14 }, { wch: 120 }];
+      XLSX.utils.book_append_sheet(wb, appInsightsLogSheet, 'App Insights Logs');
     }
 
     // Footer
@@ -479,6 +507,109 @@ export function AnalysisResult({
             </ScrollArea>
           </Card>
         </Group>
+
+        {(appInsightsSummary || appInsightsLogs.length > 0) && (
+          <Box px="md" mt="md">
+            <Card withBorder radius="md" padding="md">
+              <Group justify="space-between" mb="sm">
+                <Title order={4} fw={600}>
+                  App Insights Logs
+                </Title>
+              </Group>
+
+              {appInsightsSummary && (
+                <Table withTableBorder withColumnBorders mb="sm">
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Metric</Table.Th>
+                      <Table.Th w={160}>Value</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    <Table.Tr>
+                      <Table.Td><Text size="sm">Total Events</Text></Table.Td>
+                      <Table.Td><Text size="sm">{appInsightsSummary.total_events}</Text></Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td><Text size="sm">Info Events</Text></Table.Td>
+                      <Table.Td><Text size="sm">{appInsightsSummary.info_events}</Text></Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td><Text size="sm">Error Events</Text></Table.Td>
+                      <Table.Td><Text size="sm">{appInsightsSummary.error_events}</Text></Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td><Text size="sm">Disconnect Events</Text></Table.Td>
+                      <Table.Td><Text size="sm">{appInsightsSummary.disconnect_events}</Text></Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td><Text size="sm">Marker Events</Text></Table.Td>
+                      <Table.Td><Text size="sm">{appInsightsSummary.marker_events}</Text></Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td><Text size="sm">Non-marker Events</Text></Table.Td>
+                      <Table.Td><Text size="sm">{appInsightsSummary.non_marker_events}</Text></Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td><Text size="sm">Error Records</Text></Table.Td>
+                      <Table.Td><Text size="sm">{appInsightsSummary.error_records}</Text></Table.Td>
+                    </Table.Tr>
+                  </Table.Tbody>
+                </Table>
+              )}
+
+              {appInsightsSummary?.top_error_signatures && appInsightsSummary.top_error_signatures.length > 0 && (
+                <Box mb="sm">
+                  <Text size="sm" fw={500} mb={6}>Top Error Signatures</Text>
+                  <Stack gap={4}>
+                    {appInsightsSummary.top_error_signatures.map((errorText, index) => (
+                      <Text key={`ai-error-${index}`} size="sm">• {errorText}</Text>
+                    ))}
+                  </Stack>
+                </Box>
+              )}
+
+              {appInsightsLogs.length > 0 ? (
+                <ScrollArea h={260} offsetScrollbars>
+                  <Table withTableBorder withColumnBorders stickyHeader>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th w={190}>Timestamp</Table.Th>
+                        <Table.Th w={120}>Type</Table.Th>
+                        <Table.Th>Message</Table.Th>
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {appInsightsLogs.map((row, index) => (
+                        <Table.Tr key={`ai-log-${index}`}>
+                          <Table.Td><Text size="sm">{row.timestamp || 'N/A'}</Text></Table.Td>
+                          <Table.Td>
+                            <Badge
+                              color={
+                                row.type === 'error'
+                                  ? 'red'
+                                  : row.type === 'disconnect'
+                                    ? 'orange'
+                                    : 'blue'
+                              }
+                              variant="filled"
+                              size="xs"
+                            >
+                              {row.type}
+                            </Badge>
+                          </Table.Td>
+                          <Table.Td><Text size="sm">{row.message}</Text></Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                </ScrollArea>
+              ) : (
+                <Text size="sm" c="dimmed">No App Insights log rows were returned for this analysis.</Text>
+              )}
+            </Card>
+          </Box>
+        )}
       </Box>
 
       {/* Summary Report section */}
@@ -582,6 +713,19 @@ export function AnalysisResult({
                       <FindingCard key={index} finding={finding} />
                     ))}
                   </Stack>
+                </>
+              )}
+
+              {appInsightsSummary && (
+                <>
+                  <Divider my="sm" />
+                  <Text fw={600} mb="xs">App Insights Detailed Summary</Text>
+                  <Text size="sm" mb={4}>
+                    Total events: {appInsightsSummary.total_events}, info: {appInsightsSummary.info_events}, error: {appInsightsSummary.error_events}, disconnect: {appInsightsSummary.disconnect_events}.
+                  </Text>
+                  <Text size="sm" mb={4}>
+                    Marker events: {appInsightsSummary.marker_events}, non-marker events: {appInsightsSummary.non_marker_events}, error records: {appInsightsSummary.error_records}.
+                  </Text>
                 </>
               )}
 

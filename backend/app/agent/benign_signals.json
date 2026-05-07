@@ -1,0 +1,237 @@
+{
+  "benign_signal_categories": [
+    {
+      "id": "twilio_intermittent",
+      "name": "Twilio Client Intermittent Errors",
+      "severity": "low",
+      "services": ["assignments-api", "conversations-api"],
+      "indicators": [
+        "TwilioTaskClient exception",
+        "TwilioWebhookMessageProcessor error",
+        "Twilio task creation failed",
+        "Twilio connection timeout",
+        "Task router unavailable",
+        "Twilio API unavailable"
+      ],
+      "interpretation": "Twilio infrastructure intermittent issues. Not caused by candidate or exam platform. Expected to auto-recover on retry.",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": false
+    },
+    {
+      "id": "event_processing_background",
+      "name": "Event Processing & Async Handler Errors",
+      "severity": "low",
+      "services": ["events-broker", "ai-alert-service", "ai-metadata-service", "conversations-api"],
+      "indicators": [
+        "EventHub consumer exception",
+        "Kafka consumer exception",
+        "EventProcessor catch block",
+        "Background worker exception",
+        "Deferred event processing failed",
+        "Event handler swallowed exception",
+        "EventGrid subscriber error"
+      ],
+      "interpretation": "Background event processing encountered a transient error. Platform continues operating. No session data loss.",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": false
+    },
+    {
+      "id": "container_initialization",
+      "name": "Container/Infrastructure One-Time Initialization",
+      "severity": "low",
+      "services": ["flex-app-api"],
+      "indicators": [
+        "container already exists",
+        "Failed to get container info",
+        "Redis initialization",
+        "Blob storage unavailable",
+        "Container creation skipped"
+      ],
+      "interpretation": "One-time infrastructure setup error during startup. Service continues operation. No session impact.",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": false
+    },
+    {
+      "id": "exception_mapper_design",
+      "name": "Exception Message in Response (By Design)",
+      "severity": "low",
+      "services": [
+        "assignments-api", "chat-api", "flex-app-api",
+        "conversations-api", "fraud-model-api"
+      ],
+      "indicators": [
+        "ExceptionToResponseMapper reason: ex.Message",
+        "DomainException message to client",
+        "TokenException message response",
+        "AppException message response",
+        "NotFoundException message response"
+      ],
+      "interpretation": "API error response includes exception reason field. This is intentional design for client error reporting. Domain exceptions are scoped (not system-level leakage).",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": false
+    },
+    {
+      "id": "metrics_console_logging",
+      "name": "Console.WriteLine in Metrics/Debug Listeners",
+      "severity": "low",
+      "services": ["conversations-api", "fraud-model-api"],
+      "indicators": [
+        "KestrelMetricsListener Console.WriteLine",
+        "EventDebug console output",
+        "Metrics listener output"
+      ],
+      "interpretation": "Diagnostic metrics listener emitting to console. Expected in non-production or debug-instrumented paths. Not user-visible.",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": false
+    },
+    {
+      "id": "generic_catch_in_handlers",
+      "name": "Generic Catch Blocks in Event Handlers",
+      "severity": "low",
+      "services": [
+        "assignments-api", "ai-alert-service", "ai-metadata-service",
+        "fraud-model-api"
+      ],
+      "indicators": [
+        "catch (Exception ex) in handler",
+        "catch (Exception e) in processor",
+        "Handler generic exception swallow"
+      ],
+      "interpretation": "Event handler or background processor catches broad exceptions. Expected pattern for resilience in async flows. No data loss if handler exits gracefully.",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": false
+    },
+    {
+      "id": "test_hardcoded_secrets",
+      "name": "Hardcoded Test Credentials",
+      "severity": "low",
+      "services": ["ai-metadata-service"],
+      "indicators": [
+        "fake key",
+        "test connection string",
+        "fakeKey",
+        "fakeKeyName",
+        "test.servicebus.windows.net"
+      ],
+      "interpretation": "Test file contains dummy connection strings. Not production credentials. Security risk is test-environment only.",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": false
+    },
+    {
+      "id": "dto_serialization_for_logs",
+      "name": "Payload Serialization for Logging/Audit",
+      "severity": "low",
+      "services": [
+        "assignments-api", "chat-api", "events-broker",
+        "conversations-api", "fraud-model-api"
+      ],
+      "indicators": [
+        "JsonConvert.SerializeObject(dto)",
+        "Payload serialization",
+        "Serialize to audit log",
+        "JSON logging of request/response"
+      ],
+      "interpretation": "JSON serialization of DTOs for logging/audit purposes. Expected pattern. Safe if limited to data-transfer objects (not full domain objects with secrets).",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": false
+    },
+    {
+      "id": "missing_correlation_id",
+      "name": "Missing Correlation ID in Background Work",
+      "severity": "low",
+      "services": ["all"],
+      "indicators": [
+        "No correlation ID in async handler",
+        "Background worker missing request context",
+        "Fire-and-forget event handler",
+        "Orphan correlation context"
+      ],
+      "interpretation": "Background worker or deferred handler lacks correlation ID from incoming request. Expected in async flows without propagation. Not mission-critical for exam integrity.",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": false
+    },
+    {
+      "id": "log_level_switch_patterns",
+      "name": "Dynamic Log Level Checks & Optimizations",
+      "severity": "low",
+      "services": ["flex-app-api", "fraud-model-api"],
+      "indicators": [
+        "if (logger.IsEnabled(LogLevel.Debug))",
+        "Potential log-level switch pattern",
+        "Conditional logging optimization"
+      ],
+      "interpretation": "Performance optimization: guard expensive computations behind log-level checks. Valid pattern.",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": false
+    },
+    {
+      "id": "application_block_not_failure",
+      "name": "ApplicationBlock EventType ≠ Exam Failure",
+      "severity": "low",
+      "services": ["all"],
+      "indicators": [
+        "EventType: ApplicationBlock",
+        "ApplicationBlock alert",
+        "Block condition triggered",
+        "Application-level block"
+      ],
+      "interpretation": "ApplicationBlock is a valid event type (often deny-list enforcement or intentional block). Not inherently a failure. Consult deny-list context to interpret.",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": true,
+      "requires_schema_context": true
+    },
+    {
+      "id": "gingerwebs_not_terminate",
+      "name": "GingerWebs 'not terminate' ≠ Failure",
+      "severity": "low",
+      "services": ["ai-alert-service", "fraud-model-api"],
+      "indicators": [
+        "GW decision: not terminate",
+        "GingerWebs: no fatality",
+        "Not terminate signal"
+      ],
+      "interpretation": "GingerWebs returned 'not terminate' decision. This is a LEGITIMATE decision, not a failure. Exam continues per GW policy.",
+      "should_escalate_to_candidate": false,
+      "should_escalate_to_backend": false
+    }
+  ],
+  "cross_cutting_patterns": [
+    {
+      "pattern": "throw ex; in client code",
+      "context": "TwilioTaskClient, other infrastructure clients",
+      "severity": "low",
+      "reason": "Stack trace reset in client exception handling. Observable in logs but not mission-critical.",
+      "action": "Acknowledge but do not interpret as exam failure"
+    },
+    {
+      "pattern": "Console.WriteLine in extensions",
+      "context": "Infrastructure initialization",
+      "severity": "low",
+      "reason": "Debug/diagnostic output. Not user-visible. Expected in non-prod contexts.",
+      "action": "Ignore unless paired with actual service failure"
+    },
+    {
+      "pattern": "Payload JSON serialization",
+      "context": "Redis, audit logging, test files",
+      "severity": "low",
+      "reason": "Expected for caching/logging infrastructure objects. Safe if DTO-scoped.",
+      "action": "Acknowledge but flag only if serializing secrets or PII"
+    },
+    {
+      "pattern": "Generic catch blocks",
+      "context": "Event handlers, background workers",
+      "severity": "low",
+      "reason": "Resilience pattern for async/distributed scenarios. Expected.",
+      "action": "Acknowledge. Only escalate if handler swallowed critical operation result"
+    }
+  ],
+  "decision_tree": {
+    "if_see_twilio_error": "→ likely benign (Twilio infra), check if exam session continued",
+    "if_see_event_processor_error": "→ likely benign (background async), check if session data persisted",
+    "if_see_exception_in_response_mapper": "→ by design (domain exception handling), safe",
+    "if_see_console_writeline": "→ check context: KestrelMetrics = benign; elsewhere = investigate",
+    "if_see_generic_catch": "→ check context: event handler = benign; critical path = investigate",
+    "if_see_applicationblock_alert": "→ schema-dependent, consult deny-list/allowlist rules",
+    "if_see_gw_not_terminate": "→ legitimate GW decision, NOT a failure"
+  }
+}

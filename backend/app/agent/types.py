@@ -24,6 +24,23 @@ class SourceSummary(BaseModel):
     cosmos_assignment_records: int = 0
 
 
+class AppInsightsLogRow(BaseModel):
+    timestamp: str | None = None
+    type: Literal["info", "error", "disconnect"]
+    message: str
+
+
+class AppInsightsSummary(BaseModel):
+    total_events: int = 0
+    info_events: int = 0
+    error_events: int = 0
+    disconnect_events: int = 0
+    marker_events: int = 0
+    non_marker_events: int = 0
+    error_records: int = 0
+    top_error_signatures: list[str] = []
+
+
 class AgentOutput(BaseModel):
     summary: str
     confirmation_codes: list[str] = []
@@ -33,6 +50,8 @@ class AgentOutput(BaseModel):
     root_cause: str | None = None
     root_cause_confidence: Literal["confirmed", "probable", "uncertain"] | None = None
     timeline: list[TimelineEntry] = []
+    app_insights_summary: AppInsightsSummary | None = None
+    app_insights_logs: list[AppInsightsLogRow] = []
     source_summary: SourceSummary | None = None
     per_confirmation_code_source_summary: dict[str, SourceSummary] = {}
     tools_invoked: list[str] = []

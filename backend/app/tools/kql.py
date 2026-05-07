@@ -74,11 +74,12 @@ class QueryKQLTool(BaseTool):
             raise
 
         # Apply token cap
+        total_before = len(rows)
         rows, truncated = self._apply_token_cap(rows)
 
-        logger.info("queryKQL returned %d rows (truncated=%s)", len(rows), truncated)
+        logger.info("queryKQL returned %d/%d rows (truncated=%s)", len(rows), total_before, truncated)
 
-        return KqlOutput(rows=rows, truncated=truncated)
+        return KqlOutput(rows=rows, truncated=truncated, row_count_total=total_before)
 
     def _apply_token_cap(
         self, rows: list[dict[str, Any]]

@@ -1,0 +1,381 @@
+{
+  "platform_aliases": [
+    "proproctor",
+    "pro proctor",
+    "prometric",
+    "pro metric"
+  ],
+  "service_aliases": {
+    "candidate-app": [
+      "candidate app",
+      "candidate-app",
+      "lockdown app",
+      "desktop app",
+      "browser app",
+      "proproctor app",
+      "prometric app",
+      "app-proproctor-candidate-app",
+      "app-proproctor-candidate-app-uat"
+    ],
+    "exam-sessions-api": [
+      "exam sessions api",
+      "session api",
+      "exam session service",
+      "session service",
+      "app-proproctor-exam-sessions-api"
+    ],
+    "assignments-api": [
+      "assignments api",
+      "assignment service",
+      "proctor assignment service",
+      "app-proproctor-assignments-api"
+    ],
+    "conferences-api": [
+      "conferences api",
+      "conference service",
+      "video service",
+      "twilio service",
+      "app-proproctor-conferences-api"
+    ],
+    "chat-api": [
+      "chat api",
+      "chat service",
+      "messaging service",
+      "app-proproctor-chat-api"
+    ],
+    "identity-service": [
+      "identity service",
+      "auth service",
+      "authentication service",
+      "login service",
+      "app-proproctor-identity-service"
+    ],
+    "events-broker": [
+      "events broker",
+      "event broker",
+      "broker",
+      "app-proproctor-events-broker"
+    ],
+    "proctor-flex-app": [
+      "proctor flex",
+      "proctor flex app",
+      "proctor app",
+      "app-proproctor-proctor-flex-app",
+      "app-proproctor-flex-app-api",
+      "app-proproctor-flex-app-api-develop"
+    ],
+    "candidate-portal": [
+      "candidate portal",
+      "app-proproctor-candidate-portal"
+    ],
+    "exam-launch-api": [
+      "exam launch api",
+      "launch api",
+      "app-proproctor-exam-launch-api"
+    ],
+    "exam-configuration-api": [
+      "exam configuration api",
+      "configuration api",
+      "app-proproctor-exam-configuration-api"
+    ],
+    "infrastructure": [
+      "infra",
+      "infrastructure",
+      "kubernetes",
+      "k8s",
+      "pods",
+      "pod",
+      "container",
+      "cluster"
+    ]
+  },
+  "service_dependencies": {
+    "candidate-app": [
+      "exam-sessions-api",
+      "identity-service",
+      "chat-api",
+      "conferences-api"
+    ],
+    "exam-sessions-api": [
+      "candidate-app",
+      "assignments-api",
+      "events-broker",
+      "conferences-api"
+    ],
+    "assignments-api": [
+      "exam-sessions-api"
+    ],
+    "conferences-api": [
+      "exam-sessions-api",
+      "candidate-app"
+    ],
+    "chat-api": [
+      "candidate-app",
+      "exam-sessions-api"
+    ],
+    "identity-service": [
+      "candidate-app",
+      "exam-sessions-api"
+    ],
+    "events-broker": [
+      "exam-sessions-api"
+    ],
+    "infrastructure": [
+      "candidate-app",
+      "exam-sessions-api",
+      "events-broker"
+    ]
+  },
+  "issue_aliases": {
+    "disconnect": [
+      "disconnect",
+      "disconnected",
+      "drop",
+      "dropped",
+      "connection lost",
+      "network issue"
+    ],
+    "login": [
+      "login",
+      "log in",
+      "relogin",
+      "re-login",
+      "set confirmation code",
+      "confirmation code set",
+      "logged into application"
+    ],
+    "exit": [
+      "exit",
+      "exiting",
+      "quit app",
+      "close app",
+      "closed app",
+      "exit lockdown window"
+    ],
+    "backend": [
+      "backend",
+      "api",
+      "timeout",
+      "dependency",
+      "request failure",
+      "5xx",
+      "429",
+      "408",
+      "cosmos timeout"
+    ],
+    "infra": [
+      "infra",
+      "infrastructure",
+      "pod",
+      "oom",
+      "crashloop",
+      "failedscheduling",
+      "readiness",
+      "liveness",
+      "probe failure"
+    ],
+    "chat": [
+      "chat",
+      "proctor message",
+      "candidate message"
+    ],
+    "lockdown": [
+      "lockdown",
+      "lockdown bypass",
+      "bypass detected"
+    ],
+    "impact": [
+      "impact",
+      "affected candidate",
+      "affected candidates",
+      "blast radius",
+      "how many candidates",
+      "how many sessions",
+      "prevalence"
+    ],
+    "teststatus": [
+      "teststatus",
+      "test status",
+      "teststatus completed",
+      "test status completed",
+      "completed tests",
+      "completed sessions",
+      "status completed"
+    ],
+    "application-block": [
+      "applicationblock",
+      "application block",
+      "sessionlogtype 11",
+      "session log type 11",
+      "pre-launch: system successfully blocked application",
+      "launch: system successfully blocked application"
+    ],
+    "gw-error": [
+      "gingerwebs",
+      "gw error",
+      "fatality",
+      "not terminate",
+      "terminate",
+      "exceptioncallbackthinkproc"
+    ],
+    "twilio-benign": [
+      "accepttask error",
+      "could not accept reservation",
+      "task.deleted",
+      "connecting to a room",
+      "localtracks were not provided"
+    ],
+    "app-insights-error": [
+      "error",
+      "exception",
+      "crash",
+      "failed",
+      "failure",
+      "fatal",
+      "appexceptions"
+    ],
+    "app-insights-warning": [
+      "warning",
+      "warn",
+      "concerning",
+      "apptraces"
+    ],
+    "app-insights-performance": [
+      "slow",
+      "timeout",
+      "hung",
+      "lag",
+      "latency",
+      "response time",
+      "duration",
+      "apprequests",
+      "appdependencies"
+    ],
+    "system-check": [
+      "system check",
+      "system check failed",
+      "system check failure",
+      "readiness",
+      "readiness check",
+      "check in",
+      "gw check"
+    ],
+    "gw-detection": [
+      "face detection",
+      "multiple face",
+      "no face",
+      "face recognized",
+      "object detection",
+      "object detected",
+      "audio detection",
+      "audio detected",
+      "ambient sound"
+    ],
+    "process-monitor": [
+      "process blocked",
+      "blocked app",
+      "deny-list",
+      "blocklist",
+      "unauthorized application",
+      "unauthorized app"
+    ],
+    "lockdown-error": [
+      "lockdown issue",
+      "lockdown failed",
+      "ipc",
+      "display-lockdown-failed",
+      "ipc server"
+    ],
+    "candidate-app-exit": [
+      "app closed",
+      "app exit",
+      "exiting",
+      "exit lockdown",
+      "ipc server action received: exit",
+      "locked lockdown window closed"
+    ],
+    "security-event": [
+      "content protection",
+      "content protection bypassed",
+      "lockdown bypass",
+      "security lock"
+    ],
+    "pod-crash": [
+      "pod crashed",
+      "crashing pod",
+      "crashloop",
+      "crashloopbackoff",
+      "exited with failure"
+    ],
+    "pod-restart": [
+      "pod restarting",
+      "restart loop",
+      "restart count",
+      "multiple restart"
+    ],
+    "pod-pending": [
+      "pod pending",
+      "not starting",
+      "failed scheduling",
+      "failedscheduling",
+      "insufficient"
+    ],
+    "pod-state": [
+      "pod status",
+      "pod health",
+      "pod healthy",
+      "pod not ready"
+    ],
+    "container-error": [
+      "container terminated",
+      "container crashloop",
+      "container error",
+      "container failed"
+    ],
+    "oom-kill": [
+      "out of memory",
+      "oom",
+      "oomkilling",
+      "memory kill"
+    ],
+    "resource-pressure": [
+      "cpu pressure",
+      "disk pressure",
+      "memory pressure",
+      "high cpu",
+      "insufficient cpu",
+      "insufficient memory"
+    ],
+    "probe-failure": [
+      "probe failure",
+      "liveness probe",
+      "readiness probe",
+      "startup probe",
+      "unhealthy"
+    ],
+    "image-pull": [
+      "image pull",
+      "imagepull",
+      "image pull failed",
+      "imagepullbackoff"
+    ],
+    "connection-error": [
+      "connection",
+      "connection error",
+      "offline",
+      "network",
+      "unreachable",
+      "socket"
+    ],
+    "auth-error": [
+      "authentication",
+      "auth",
+      "unauthorized",
+      "401",
+      "403",
+      "forbidden",
+      "token",
+      "token expired"
+    ]
+  }
+}

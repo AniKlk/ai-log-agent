@@ -172,6 +172,7 @@ class TimelineOutput(BaseModel):
 class KqlOutput(BaseModel):
     rows: list[dict[str, Any]] = []
     truncated: bool = False
+    row_count_total: int = 0  # total rows before truncation, 0 means not known
 
 
 class CosmosQueryInput(BaseModel):

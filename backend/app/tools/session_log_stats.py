@@ -10,6 +10,7 @@ Steps:
 Works for any keyword: errors, disconnects, specific messages, etc.
 """
 import logging
+import re
 from collections import Counter
 
 from azure.cosmos.aio import CosmosClient
@@ -18,6 +19,35 @@ from pydantic import BaseModel, Field
 from app.tools.base import BaseTool
 
 logger = logging.getLogger(__name__)
+
+
+def _keyword_conditions(keywords: list[str]) -> str:
+    conditions: list[str] = []
+
+    for raw_keyword in keywords:
+        keyword = (raw_keyword or "").strip().lower()
+        if not keyword:
+            continue
+
+        def _esc(text: str) -> str:
+            return text.replace("'", "''")
+
+        conditions.append(f"CONTAINS(LOWER(e.Metadata), '{_esc(keyword)}')")
+
+        normalized = re.sub(r"[:=]", " ", keyword)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        if normalized and normalized != keyword:
+            conditions.append(f"CONTAINS(LOWER(e.Metadata), '{_esc(normalized)}')")
+
+        tokens = [token for token in re.split(r"[^a-z0-9]+", keyword) if len(token) >= 3]
+        if len(tokens) >= 2:
+            token_and = " AND ".join(
+                f"CONTAINS(LOWER(e.Metadata), '{_esc(token)}')" for token in tokens
+            )
+            conditions.append(f"({token_and})")
+
+    deduped = list(dict.fromkeys(conditions))
+    return " OR ".join(deduped) if deduped else "false"
 
 
 class SessionLogStatsInput(BaseModel):
@@ -144,10 +174,7 @@ class GetSessionLogStatsTool(BaseTool):
         start_safe = args.start_date.replace("'", "''")
         end_safe = args.end_date.replace("'", "''")
 
-        keyword_conditions = " OR ".join(
-            f"CONTAINS(LOWER(e.Metadata), '{kw.lower().replace(chr(39), chr(39)*2)}')"
-            for kw in args.keywords
-        )
+        keyword_conditions = _keyword_conditions(args.keywords)
 
         # Fetch Metadata text when samples are requested; otherwise just the session id
         if args.include_metadata_samples:

@@ -20,7 +20,7 @@ export async function analyzeQuery(
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '');
     if (response.status === 504) {
-      throw new Error('Analysis timed out. The query may be too complex.');
+      throw new Error('Analysis timed out on the server. Please retry, narrow the date range, or reduce the query scope.');
     }
     if (response.status === 422) {
       throw new Error('Invalid query. Please check your input.');

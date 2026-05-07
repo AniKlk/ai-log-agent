@@ -110,6 +110,8 @@ class GetSessionTimelineTool(BaseTool):
                 time_filter += f" and TimeGenerated <= datetime('{ts_end}') + 1h"
                 candidate_time_filter += f" and TimeGenerated <= datetime('{ts_end}') + 7d"
 
+        process_signal_time_filter = time_filter or candidate_time_filter
+
         kql = (
             "let cc = '{code}'; "
             "let esid = '{esid}'; "
@@ -123,7 +125,8 @@ class GetSessionTimelineTool(BaseTool):
             "  or tostring(column_ifexists('customDimensions', dynamic({{}})).confirmationCode) == cc "
             "  or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
             "  or tostring(Properties) has cc "
-            "| project timestamp=TimeGenerated, event=Name; "
+            "| extend severity = toint(column_ifexists('SeverityLevel', int(0))), evt_msg=Name "
+            "| project timestamp=TimeGenerated, event=iff(severity >= 2, strcat('[SEVERITY=', tostring(severity), '] ', Name), Name); "
             "let traces = AppTraces "
             "{time_filter} "
             "| where Properties.ExamSessionId == esid "
@@ -134,7 +137,9 @@ class GetSessionTimelineTool(BaseTool):
             "  or tostring(column_ifexists('customDimensions', dynamic({{}})).confirmationCode) == cc "
             "  or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
             "  or tostring(Properties) has cc "
-            "| project timestamp=TimeGenerated, event=coalesce(OperationName, Message); "
+            "| extend severity = toint(column_ifexists('SeverityLevel', int(0))) "
+            "| where severity >= 1 or Message has 'warning' or Message has 'error' or Message has 'timeout' or Message has 'failed to kill' "
+            "| project timestamp=TimeGenerated, event=iff(severity >= 2, strcat('[SEVERITY=', tostring(severity), '] ', coalesce(OperationName, Message)), coalesce(OperationName, Message)); "
             "let errors = AppExceptions "
             "{time_filter} "
             "| where Properties.ExamSessionId == esid "
@@ -145,7 +150,7 @@ class GetSessionTimelineTool(BaseTool):
             "  or tostring(column_ifexists('customDimensions', dynamic({{}})).confirmationCode) == cc "
             "  or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
             "  or tostring(Properties) has cc "
-            "| project timestamp=TimeGenerated, event=coalesce(ProblemId, OuterMessage); "
+            "| project timestamp=TimeGenerated, event=strcat('[EXCEPTION] ', coalesce(ProblemId, OuterMessage), ' | ', InnermostMessage); "
             "let backend_timeout_traces = AppTraces "
             "{time_filter} "
             "| where _ResourceId contains 'app-proproctor-exam-sessions-api' "
@@ -181,14 +186,20 @@ class GetSessionTimelineTool(BaseTool):
             "       or Message has 'logged into application' "
             "       or Message has 'login' "
             "       or Message has 'start' "
-            "       or Message has 'launch')) "
+            "       or Message has 'launch' "
+            "       or Message has 'content protection bypassed' "
+            "       or Message has 'lockdown bypass detected')) "
             "    or Message has 'exit' "
             "    or Message has 'exiting app' "
             "    or Message has 'exiting application' "
             "    or Message has 'quit app' "
             "    or Message has 'close app' "
+            "    or Message has 'exit lockdown window' "
+            "    or Message has 'ipc server action received: exit' "
+            "    or Message has 'content protection bypassed' "
+            "    or Message has 'lockdown bypass detected' "
             "  ) "
-            "| project timestamp=TimeGenerated, event=iff(Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' or Message has 'login', strcat('candidate-app login marker: ', Message), iff(Message has 'exit' or Message has 'exiting app' or Message has 'exiting application' or Message has 'quit app' or Message has 'close app', strcat('candidate-app exit marker: ', Message), strcat('candidate-app lifecycle: ', Message))); "
+            "| project timestamp=TimeGenerated, event=iff(Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' or Message has 'login', strcat('candidate-app login marker: ', Message), iff(Message has 'exit' or Message has 'exiting app' or Message has 'exiting application' or Message has 'quit app' or Message has 'close app' or Message has 'exit lockdown window' or Message has 'ipc server action received: exit', strcat('candidate-app exit marker: ', Message), iff(Message has 'content protection bypassed' or Message has 'lockdown bypass detected', strcat('candidate-app security marker: ', Message), strcat('candidate-app lifecycle: ', Message)))); "
             "let candidate_lifecycle_events = AppEvents "
             "{candidate_time_filter} "
             "| where _ResourceId contains 'app-proproctor-candidate-app' "
@@ -208,46 +219,72 @@ class GetSessionTimelineTool(BaseTool):
             "       or Name has 'logged into application' "
             "       or Name has 'login' "
             "       or Name has 'start' "
-            "       or Name has 'launch')) "
+            "       or Name has 'launch' "
+            "       or Name has 'content protection bypassed' "
+            "       or Name has 'lockdown bypass detected')) "
             "    or Name has 'exit' "
             "    or Name has 'exiting app' "
             "    or Name has 'exiting application' "
             "    or Name has 'quit app' "
             "    or Name has 'close app' "
+            "    or Name has 'exit lockdown window' "
+            "    or Name has 'ipc server action received: exit' "
+            "    or Name has 'content protection bypassed' "
+            "    or Name has 'lockdown bypass detected' "
             "  ) "
-            "| project timestamp=TimeGenerated, event=iff(Name has 'set confirmation code' or Name has 'confirmation code set' or Name has 'logged into application' or Name has 'login', strcat('candidate-app login marker: ', Name), iff(Name has 'exit' or Name has 'exiting app' or Name has 'exiting application' or Name has 'quit app' or Name has 'close app', strcat('candidate-app exit marker: ', Name), strcat('candidate-app lifecycle event: ', Name))); "
+            "| project timestamp=TimeGenerated, event=iff(Name has 'set confirmation code' or Name has 'confirmation code set' or Name has 'logged into application' or Name has 'login', strcat('candidate-app login marker: ', Name), iff(Name has 'exit' or Name has 'exiting app' or Name has 'exiting application' or Name has 'quit app' or Name has 'close app' or Name has 'exit lockdown window' or Name has 'ipc server action received: exit', strcat('candidate-app exit marker: ', Name), iff(Name has 'content protection bypassed' or Name has 'lockdown bypass detected', strcat('candidate-app security marker: ', Name), strcat('candidate-app lifecycle event: ', Name)))); "
+            "let candidate_process_signals_traces = AppTraces "
+            "{process_signal_time_filter} "
+            "| where _ResourceId contains 'app-proproctor-candidate-app' "
+            "   or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).AppMode)) "
+            "   or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).appMode)) "
+            "| where tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc or tostring(Properties) has cc or Message has cc "
+            "| where Message has 'failed to kill process' or Message has 'failed to kill app' or Message has 'failed to kill' or Message has 'unauthorized application' or Message has 'unauthorised application' or Message has 'unauthorized app' or Message has 'unauthorised app' "
+            "| extend severity = toint(column_ifexists('SeverityLevel', int(0))) "
+            "| project timestamp=TimeGenerated, event=strcat('[SEVERITY=', tostring(severity), '] candidate-app process block signal: ', Message); "
+            "let candidate_process_signals_events = AppEvents "
+            "{process_signal_time_filter} "
+            "| where _ResourceId contains 'app-proproctor-candidate-app' "
+            "   or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).AppMode)) "
+            "   or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).appMode)) "
+            "| extend evt_message = coalesce(tostring(Properties.message), tostring(Name)), severity = toint(column_ifexists('SeverityLevel', int(0))) "
+            "| where tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc or tostring(Properties) has cc or evt_message has cc "
+            "| where evt_message has 'failed to kill process' or evt_message has 'failed to kill app' or evt_message has 'failed to kill' or evt_message has 'unauthorized application' or evt_message has 'unauthorised application' or evt_message has 'unauthorized app' or evt_message has 'unauthorised app' "
+            "| project timestamp=TimeGenerated, event=strcat('[SEVERITY=', tostring(severity), '] candidate-app process block signal: ', evt_message); "
             "let candidate_exit_probe_traces = AppTraces "
             "{candidate_time_filter} "
-            "| where (Message has 'exit' or Message has 'exiting' or Message has 'quit app' or Message has 'close app' or Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application') "
+            "| where (Message has 'exit' or Message has 'exiting' or Message has 'quit app' or Message has 'close app' or Message has 'exit lockdown window' or Message has 'ipc server action received: exit' or Message has 'content protection bypassed' or Message has 'lockdown bypass detected' or Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application') "
             "  and (tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc or tostring(Properties) has cc or Message has cc or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).AppMode)) or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).appMode))) "
-            "| project timestamp=TimeGenerated, event=iff(Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' or Message has 'login', strcat('candidate-app login marker (probe): ', Message), strcat('candidate-app exit marker (probe): ', Message)); "
+            "| project timestamp=TimeGenerated, event=iff(Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' or Message has 'login', strcat('candidate-app login marker (probe): ', Message), iff(Message has 'content protection bypassed' or Message has 'lockdown bypass detected', strcat('candidate-app security marker (probe): ', Message), strcat('candidate-app exit marker (probe): ', Message))); "
             "let candidate_exit_probe_events = AppEvents "
             "{candidate_time_filter} "
-            "| where (Name has 'exit' or Name has 'exiting' or Name has 'quit app' or Name has 'close app' or Name has 'set confirmation code' or Name has 'confirmation code set' or Name has 'logged into application') "
+            "| where (Name has 'exit' or Name has 'exiting' or Name has 'quit app' or Name has 'close app' or Name has 'exit lockdown window' or Name has 'ipc server action received: exit' or Name has 'content protection bypassed' or Name has 'lockdown bypass detected' or Name has 'set confirmation code' or Name has 'confirmation code set' or Name has 'logged into application') "
             "  and (tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc or tostring(Properties) has cc or tostring(Name) has cc or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).AppMode)) or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).appMode))) "
-            "| project timestamp=TimeGenerated, event=iff(Name has 'set confirmation code' or Name has 'confirmation code set' or Name has 'logged into application' or Name has 'login', strcat('candidate-app login marker (probe): ', Name), strcat('candidate-app exit marker (probe): ', Name)); "
+            "| project timestamp=TimeGenerated, event=iff(Name has 'set confirmation code' or Name has 'confirmation code set' or Name has 'logged into application' or Name has 'login', strcat('candidate-app login marker (probe): ', Name), iff(Name has 'content protection bypassed' or Name has 'lockdown bypass detected', strcat('candidate-app security marker (probe): ', Name), strcat('candidate-app exit marker (probe): ', Name))); "
             "let candidate_role_probe_traces = AppTraces "
             "{candidate_time_filter} "
             "| where * has cc "
             "| extend role=tostring(column_ifexists('AppRoleName', '')) "
             "| where role contains 'web' or role == 'null' or isempty(role) "
-            "| where Message has 'exit' or Message has 'exiting' or Message has 'quit app' or Message has 'close app' or Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' "
-            "| project timestamp=TimeGenerated, event=iff(Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' or Message has 'login', strcat('candidate-app login marker (role-probe): ', Message), strcat('candidate-app exit marker (role-probe): ', Message)); "
+            "| where Message has 'exit' or Message has 'exiting' or Message has 'quit app' or Message has 'close app' or Message has 'exit lockdown window' or Message has 'ipc server action received: exit' or Message has 'content protection bypassed' or Message has 'lockdown bypass detected' or Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' "
+            "| project timestamp=TimeGenerated, event=iff(Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' or Message has 'login', strcat('candidate-app login marker (role-probe): ', Message), iff(Message has 'content protection bypassed' or Message has 'lockdown bypass detected', strcat('candidate-app security marker (role-probe): ', Message), strcat('candidate-app exit marker (role-probe): ', Message))); "
             "let candidate_role_probe_direct = AppTraces "
             "| where TimeGenerated >= ago(30d) "
             "| where * has cc "
             "| extend role=tostring(column_ifexists('AppRoleName', '')) "
             "| where role contains 'web' or role == 'null' or isempty(role) "
-            "| where Message has 'exit' or Message has 'exiting' or Message has 'quit app' or Message has 'close app' or Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' "
-            "| project timestamp=TimeGenerated, event=iff(Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' or Message has 'login', strcat('candidate-app login marker (direct-role-probe): ', Message), strcat('candidate-app exit marker (direct-role-probe): ', Message)) "
+            "| where Message has 'exit' or Message has 'exiting' or Message has 'quit app' or Message has 'close app' or Message has 'exit lockdown window' or Message has 'ipc server action received: exit' or Message has 'content protection bypassed' or Message has 'lockdown bypass detected' or Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' "
+            "| project timestamp=TimeGenerated, event=iff(Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' or Message has 'login', strcat('candidate-app login marker (direct-role-probe): ', Message), iff(Message has 'content protection bypassed' or Message has 'lockdown bypass detected', strcat('candidate-app security marker (direct-role-probe): ', Message), strcat('candidate-app exit marker (direct-role-probe): ', Message))) "
             "| take 2000; "
-            "union events, traces, errors, backend_timeout_traces, request_failures, dependency_failures, candidate_lifecycle_traces, candidate_lifecycle_events, candidate_exit_probe_traces, candidate_exit_probe_events, candidate_role_probe_traces, candidate_role_probe_direct "
-            "| order by timestamp asc"
+            "union events, traces, errors, backend_timeout_traces, request_failures, dependency_failures, candidate_lifecycle_traces, candidate_lifecycle_events, candidate_process_signals_traces, candidate_process_signals_events, candidate_exit_probe_traces, candidate_exit_probe_events, candidate_role_probe_traces, candidate_role_probe_direct "
+            "| order by timestamp asc "
+            "| take 1500"
         ).format(
             code=confirmation_code.replace("'", "''"),
             esid=exam_session_id.replace("'", "''"),
             time_filter=time_filter,
             candidate_time_filter=candidate_time_filter or time_filter,
+            process_signal_time_filter=process_signal_time_filter,
         )
 
         events: list[TimelineEvent] = []
@@ -273,7 +310,64 @@ class GetSessionTimelineTool(BaseTool):
         except Exception:
             logger.exception("App Insights timeline query failed for %s", confirmation_code)
 
-        return events
+        legacy_kql = (
+            "let cc = '{code}'; "
+            "let anchors = AppTraces "
+            "| where TimeGenerated >= ago(365d) "
+            "| extend msg = tostring(column_ifexists('Message', '')) "
+            "| extend cd = tostring(column_ifexists('customDimensions', dynamic({{}}))) "
+            "| extend props = tostring(column_ifexists('Properties', dynamic({{}}))) "
+            "| extend sid = coalesce(tostring(column_ifexists('session_Id', '')), tostring(column_ifexists('SessionId', ''))) "
+            "| extend opid = coalesce(tostring(column_ifexists('operation_Id', '')), tostring(column_ifexists('OperationId', ''))) "
+            "| where cd has cc or props has cc or msg has cc "
+            "| summarize by sid, opid; "
+            "AppTraces "
+            "| where TimeGenerated >= ago(365d) "
+            "| extend ts = TimeGenerated "
+            "| extend msg = tostring(column_ifexists('Message', '')) "
+            "| extend sid = coalesce(tostring(column_ifexists('session_Id', '')), tostring(column_ifexists('SessionId', ''))) "
+            "| extend opid = coalesce(tostring(column_ifexists('operation_Id', '')), tostring(column_ifexists('OperationId', ''))) "
+            "| where (isnotempty(sid) and sid in (anchors | where isnotempty(sid) | project sid)) "
+            "   or (isnotempty(opid) and opid in (anchors | where isnotempty(opid) | project opid)) "
+            "| where msg has 'exit' or msg has 'exiting' or msg has 'quit app' or msg has 'close app' or msg has 'exit lockdown window' or msg has 'ipc server action received: exit' or msg has 'content protection bypassed' or msg has 'lockdown bypass detected' or msg has 'set confirmation code' or msg has 'confirmation code set' or msg has 'logged into application' "
+            "| project timestamp=ts, event=iff(msg has 'set confirmation code' or msg has 'confirmation code set' or msg has 'logged into application' or msg has 'login', strcat('candidate-app login marker (legacy): ', msg), iff(msg has 'content protection bypassed' or msg has 'lockdown bypass detected', strcat('candidate-app security marker (legacy): ', msg), strcat('candidate-app exit marker (legacy): ', msg))) "
+            "| order by timestamp asc"
+        ).format(code=confirmation_code.replace("'", "''"))
+
+        try:
+            legacy_response = await self._logs_client.query_workspace(
+                workspace_id=self._proproctor_workspace_id,
+                query=legacy_kql,
+                timespan=self._compute_session_timespan(session_record),
+            )
+            if legacy_response.status == LogsQueryStatus.SUCCESS and legacy_response.tables:
+                table = legacy_response.tables[0]
+                columns = [c.name if hasattr(c, 'name') else str(c) for c in table.columns]
+                for row in table.rows:
+                    record = dict(zip(columns, row))
+                    ts = normalize_timestamp(record.get("timestamp"))
+                    events.append(
+                        TimelineEvent(
+                            timestamp=ts,
+                            event=record.get("event", ""),
+                            source="system",
+                        )
+                    )
+        except Exception:
+            logger.exception("Legacy App Insights timeline fallback query failed for %s", confirmation_code)
+
+        deduped_events: list[TimelineEvent] = []
+        seen_event_keys: set[tuple[str, str, str]] = set()
+        for event in events:
+            key = (event.timestamp, event.event, event.source)
+            if key in seen_event_keys:
+                continue
+            seen_event_keys.add(key)
+            deduped_events.append(event)
+
+        deduped_events.sort(key=lambda event: event.timestamp)
+
+        return deduped_events
 
     async def _query_infra_events(self, exam_session_id: str, session_record: dict) -> list[TimelineEvent]:
         """Query KubeEvents, ContainerLogV2, KubePodInventory from infra workspace."""
