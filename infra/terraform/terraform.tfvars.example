@@ -1,0 +1,29 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# Do NOT commit terraform.tfvars to source control (add it to .gitignore).
+
+# ── Deployment ───────────────────────────────────────────────────────────────
+location            = "eastus"
+environment         = "dev"
+resource_group_name = "ai-log-agent-rg"
+
+# ── Existing Azure OpenAI resource ───────────────────────────────────────────
+openai_resource_group = "proproctor-rg"
+openai_account_name   = "proproctor-investigator-resource"
+openai_deployment_name = "gpt-4o"
+openai_api_version     = "2024-12-01-preview"
+
+# ── Existing Cosmos DB ───────────────────────────────────────────────────────
+cosmos_resource_group = "proproctor-rg"
+cosmos_account_name   = "proproctor-cosmos"
+
+# ── Existing Log Analytics workspaces ───────────────────────────────────────
+proproctor_workspace_resource_group = "proproctor-rg"
+proproctor_workspace_name           = "proproctor-workspace"
+
+infra_workspace_resource_group = "proproctor-infra-rg"
+infra_workspace_name           = "proproctor-infra-workspace"
+
+# ── App tuning ───────────────────────────────────────────────────────────────
+analyze_timeout_seconds  = 600
+max_agent_iterations     = 10
+tool_response_max_tokens = 40000
