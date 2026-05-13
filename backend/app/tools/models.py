@@ -140,8 +140,8 @@ class KqlInput(BaseModel):
         description="Target workspace: proproctor (application logs) or infrastructure",
     )
     timespan_days: int = Field(
-        7,
-        description="Number of days to query. Default 7. Use larger values (e.g. 30) for broader searches or when the user specifies a date range.",
+        90,
+        description="Number of days to query. Default 90. Use larger values when the user specifies an older date range.",
     )
 
 

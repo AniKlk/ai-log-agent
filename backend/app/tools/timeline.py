@@ -19,7 +19,8 @@ _COSMOS_CHAT_DATABASE = "ExamChat"
 _COSMOS_CHAT_CONTAINER = "exam-chat"
 _SESSION_LOG_DATABASE = "ExamSession"
 _SESSION_LOG_CONTAINER = "session-log"
-_DEFAULT_TIMESPAN_DAYS = 30
+_DEFAULT_TIMESPAN_DAYS = 90
+_DEFAULT_INFRA_TIMESPAN_DAYS = 30
 _MAX_TIMESPAN_DAYS = 730
 _TOKEN_ESTIMATE_CHARS = 4
 _TIMELINE_PRIORITY_TERMS = (
@@ -136,7 +137,7 @@ class GetSessionTimelineTool(BaseTool):
         session_end = session_record.get("CompletedDate") or session_record.get("UpdatedDate")
 
         time_filter = ""
-        candidate_time_filter = "| where TimeGenerated >= ago(365d)"
+        candidate_time_filter = "| where TimeGenerated >= ago(90d)"
         if session_start:
             ts = normalize_timestamp(str(session_start))
             time_filter = f"| where TimeGenerated >= datetime('{ts}') - 1h"
@@ -305,7 +306,7 @@ class GetSessionTimelineTool(BaseTool):
             "| where Message has 'exit' or Message has 'exiting' or Message has 'quit app' or Message has 'close app' or Message has 'exit lockdown window' or Message has 'ipc server action received: exit' or Message has 'content protection bypassed' or Message has 'lockdown bypass detected' or Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' "
             "| project timestamp=TimeGenerated, event=iff(Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' or Message has 'login', strcat('candidate-app login marker (role-probe): ', Message), iff(Message has 'content protection bypassed' or Message has 'lockdown bypass detected', strcat('candidate-app security marker (role-probe): ', Message), strcat('candidate-app exit marker (role-probe): ', Message))); "
             "let candidate_role_probe_direct = AppTraces "
-            "| where TimeGenerated >= ago(30d) "
+            "{candidate_time_filter} "
             "| where * has cc "
             "| extend role=tostring(column_ifexists('AppRoleName', '')) "
             "| where role contains 'web' or role == 'null' or isempty(role) "
@@ -447,7 +448,7 @@ class GetSessionTimelineTool(BaseTool):
             "  event=strcat('Pod ', Name, ' status=', PodStatus, ' reason=', ContainerStatusReason, ' [', Namespace, ']'); "
             "union kube_events, container_logs, pod_inv "
             "| order by timestamp asc "
-            "| take 200"
+            "| take 500"
         ).format(esid=esid_safe, time_filter=time_filter)
 
         events: list[TimelineEvent] = []
@@ -455,7 +456,7 @@ class GetSessionTimelineTool(BaseTool):
             response = await self._logs_client.query_workspace(
                 workspace_id=self._infra_workspace_id,
                 query=kql,
-                timespan=self._compute_session_timespan(session_record),
+                timespan=timedelta(days=_DEFAULT_INFRA_TIMESPAN_DAYS),
             )
             if response.status == LogsQueryStatus.SUCCESS and response.tables:
                 table = response.tables[0]

@@ -34,7 +34,8 @@ _CONFERENCE_DATABASE = "PPR.Conferences"
 _CONFERENCE_CONTAINER = "conference"
 _ASSIGNMENT_DATABASE = "Assignment"
 _ASSIGNMENT_CONTAINER = "assignment"
-_DEFAULT_TIMESPAN_DAYS = 30
+_DEFAULT_TIMESPAN_DAYS = 90
+_DEFAULT_INFRA_TIMESPAN_DAYS = 30
 _MAX_TIMESPAN_DAYS = 730
 _TOKEN_ESTIMATE_CHARS = 4
 _LIFECYCLE_MISMATCH_MINUTES = 5
@@ -309,6 +310,16 @@ class GetSessionDataTool(BaseTool):
         all_events.sort(key=lambda event: event.timestamp)
         all_errors.sort(key=lambda error: error.timestamp)
 
+        # Derive summary counts from de-duplicated final App Insights payload so
+        # fallback/probe rows are reflected without massively inflated counts.
+        final_ai_event_keys = {
+            (event.timestamp, event.message, event.type)
+            for event in ai_events
+            if event.source == "app-insights"
+        }
+        final_ai_error_keys = {(error.timestamp, error.error) for error in ai_errors}
+        app_insights_total = len(final_ai_event_keys) + len(final_ai_error_keys)
+
         return SessionDataOutput(
             events=all_events,
             errors=all_errors,
@@ -317,7 +328,7 @@ class GetSessionDataTool(BaseTool):
             assignment=assignment,
             truncated=False,
             source_summary=SourceSummary(
-                app_insights_events=ai_count + role_probe_count,
+                app_insights_events=app_insights_total,
                 infra_events=infra_count,
                 cosmos_session_records=1,
                 cosmos_session_log_records=sl_count,
@@ -454,7 +465,7 @@ class GetSessionDataTool(BaseTool):
         """Direct candidate-app AppTraces probe using AppRoleName filter and high max rows."""
         session_start = session_record.get("CreatedDate") or session_record.get("CreatedAt")
         session_end = session_record.get("CompletedDate") or session_record.get("UpdatedDate")
-        probe_time_filter = "| where TimeGenerated >= ago(365d)"
+        probe_time_filter = "| where TimeGenerated >= ago(90d)"
         if session_start:
             ts = normalize_timestamp(str(session_start))
             probe_time_filter = f"| where TimeGenerated >= datetime('{ts}') - 7d"
@@ -473,7 +484,7 @@ class GetSessionDataTool(BaseTool):
             "| where msg has 'exit' or msg has 'candidate exited' or msg has 'candidate exit' or msg has 'exiting' or msg has 'quit app' or msg has 'close app' or msg has 'exit lockdown window' or msg has 'ipc server action received: exit' or msg has 'content protection bypassed' or msg has 'lockdown bypass detected' or msg has 'set confirmation code' or msg has 'confirmation code set' or msg has 'logged into application' "
             "| project timestamp=TimeGenerated, message=iff(msg has 'set confirmation code' or msg has 'confirmation code set' or msg has 'logged into application' or msg has 'login', strcat('candidate-app login marker (direct-role-probe): ', msg), iff(msg has 'content protection bypassed' or msg has 'lockdown bypass detected', strcat('candidate-app security marker (direct-role-probe): ', msg), strcat('candidate-app exit marker (direct-role-probe): ', msg))), type=iff(msg has 'exit' or msg has 'candidate exited' or msg has 'candidate exit' or msg has 'exiting' or msg has 'quit app' or msg has 'close app' or msg has 'exit lockdown window' or msg has 'ipc server action received: exit' or msg has 'content protection bypassed' or msg has 'lockdown bypass detected', 'disconnect', 'info') "
             "| order by timestamp asc "
-            "| take 2000"
+            "| take 4000"
         ).format(
             code=confirmation_code.replace("'", "''"),
             probe_time_filter=probe_time_filter,
@@ -771,7 +782,7 @@ class GetSessionDataTool(BaseTool):
         session_end = session_record.get("CompletedDate") or session_record.get("UpdatedDate")
 
         time_filter = ""
-        candidate_time_filter = "| where TimeGenerated >= ago(365d)"
+        candidate_time_filter = "| where TimeGenerated >= ago(90d)"
         if session_start:
             ts = normalize_timestamp(str(session_start))
             time_filter = f"| where TimeGenerated >= datetime('{ts}') - 1h"
@@ -1038,7 +1049,7 @@ class GetSessionDataTool(BaseTool):
         legacy_kql = (
             "let cc = '{code}'; "
             "let anchors = AppTraces "
-            "| where TimeGenerated >= ago(365d) "
+            "| where TimeGenerated >= ago(90d) "
             "| extend msg = tostring(column_ifexists('Message', '')) "
             "| extend cd = tostring(column_ifexists('customDimensions', dynamic({{}}))) "
             "| extend props = tostring(column_ifexists('Properties', dynamic({{}}))) "
@@ -1047,7 +1058,7 @@ class GetSessionDataTool(BaseTool):
             "| where cd has cc or props has cc or msg has cc "
             "| summarize by sid, opid; "
             "AppTraces "
-            "| where TimeGenerated >= ago(365d) "
+            "| where TimeGenerated >= ago(90d) "
             "| extend ts = TimeGenerated "
             "| extend msg = tostring(column_ifexists('Message', '')) "
             "| extend op = coalesce(tostring(column_ifexists('OperationName', '')), tostring(column_ifexists('operation_Name', '')), tostring(column_ifexists('operationName', ''))) "
@@ -1085,6 +1096,80 @@ class GetSessionDataTool(BaseTool):
                     )
         except Exception:
             logger.exception("Legacy App Insights fallback query failed for %s", confirmation_code)
+
+        # Final direct candidate-app fallback to avoid false zero when candidate-app
+        # rows exist but do not align with lifecycle-marker/anchor patterns.
+        candidate_direct_kql = (
+            "let cc = '{code}'; "
+            "let candidate_traces = AppTraces "
+            "{candidate_time_filter} "
+            "| where _ResourceId contains 'app-proproctor-candidate-app' "
+            "| where tostring(Properties.ConfirmationCode) == cc "
+            "   or tostring(Properties.confirmationCode) == cc "
+            "   or tostring(Properties) has cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
+            "   or tostring(column_ifexists('Message', '')) has cc "
+            "| project timestamp=TimeGenerated, name=coalesce(tostring(OperationName), 'trace'), message=strcat('candidate-app trace (direct): ', tostring(column_ifexists('Message', ''))), type=iff(toint(coalesce(column_ifexists('SeverityLevel', int(0)), column_ifexists('severityLevel', int(0)))) >= 2 or tostring(column_ifexists('Message', '')) has 'warn' or tostring(column_ifexists('Message', '')) has 'warning' or tostring(column_ifexists('Message', '')) has 'error' or tostring(column_ifexists('Message', '')) has 'fail' or tostring(column_ifexists('Message', '')) has 'exception' or tostring(column_ifexists('Message', '')) has 'disconnect' or tostring(column_ifexists('Message', '')) has 'network' or tostring(column_ifexists('Message', '')) has 'socket', 'error', 'info'), errorDetail=tostring(column_ifexists('Message', '')); "
+            "let candidate_events = AppEvents "
+            "{candidate_time_filter} "
+            "| where _ResourceId contains 'app-proproctor-candidate-app' "
+            "| where tostring(Properties.ConfirmationCode) == cc "
+            "   or tostring(Properties.confirmationCode) == cc "
+            "   or tostring(Properties) has cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
+            "   or tostring(Name) has cc "
+            "| project timestamp=TimeGenerated, name=tostring(Name), message=strcat('candidate-app event (direct): ', tostring(Name)), type=iff(tostring(Name) has 'warn' or tostring(Name) has 'warning' or tostring(Name) has 'error' or tostring(Name) has 'fail' or tostring(Name) has 'exception', 'error', 'info'), errorDetail=tostring(Name); "
+            "let candidate_exceptions = AppExceptions "
+            "{candidate_time_filter} "
+            "| where _ResourceId contains 'app-proproctor-candidate-app' "
+            "| where tostring(Properties.ConfirmationCode) == cc "
+            "   or tostring(Properties.confirmationCode) == cc "
+            "   or tostring(Properties) has cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
+            "   or tostring(OuterMessage) has cc "
+            "   or tostring(InnermostMessage) has cc "
+            "| project timestamp=TimeGenerated, name=coalesce(tostring(ProblemId), 'exception'), message=strcat('candidate-app exception (direct): ', coalesce(tostring(OuterMessage), tostring(ProblemId))), type='error', errorDetail=tostring(InnermostMessage); "
+            "union candidate_traces, candidate_events, candidate_exceptions "
+            "| order by timestamp asc "
+            "| take 2000"
+        ).format(
+            code=confirmation_code.replace("'", "''"),
+            candidate_time_filter=candidate_time_filter or time_filter,
+        )
+
+        try:
+            candidate_direct_response = await self._logs_client.query_workspace(
+                workspace_id=self._proproctor_workspace_id,
+                query=candidate_direct_kql,
+                timespan=timespan,
+            )
+
+            if candidate_direct_response.status == LogsQueryStatus.SUCCESS and candidate_direct_response.tables:
+                table = candidate_direct_response.tables[0]
+                columns = [c.name if hasattr(c, 'name') else str(c) for c in table.columns]
+                for row in table.rows:
+                    total_count += 1
+                    record = dict(zip(columns, row))
+                    ts = normalize_timestamp(record.get("timestamp"))
+                    event_type = record.get("type", "info")
+                    if event_type == "error":
+                        errors.append(
+                            LogError(
+                                timestamp=ts,
+                                error=record.get("errorDetail") or record.get("message", ""),
+                            )
+                        )
+                    else:
+                        events.append(
+                            LogEvent(
+                                timestamp=ts,
+                                message=record.get("message") or record.get("name", ""),
+                                type=event_type,
+                                source="app-insights",
+                            )
+                        )
+        except Exception:
+            logger.exception("Direct candidate-app fallback query failed for %s", confirmation_code)
 
         return events, errors, total_count
 
@@ -1140,7 +1225,7 @@ class GetSessionDataTool(BaseTool):
             "  source='PodInventory'; "
             "union kube_events, container_logs, pod_inv "
             "| order by timestamp asc "
-            "| take 200"
+            "| take 500"
         ).format(esid=esid_safe, time_filter=time_filter)
 
         events: list[LogEvent] = []
@@ -1151,7 +1236,7 @@ class GetSessionDataTool(BaseTool):
             response = await self._logs_client.query_workspace(
                 workspace_id=self._infra_workspace_id,
                 query=kql,
-                timespan=timedelta(days=_DEFAULT_TIMESPAN_DAYS),
+                timespan=timedelta(days=_DEFAULT_INFRA_TIMESPAN_DAYS),
             )
 
             if response.status == LogsQueryStatus.SUCCESS and response.tables:

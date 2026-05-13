@@ -12,7 +12,7 @@ from app.tools.models import KqlInput, KqlOutput
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TIMESPAN_DAYS = 7
+_DEFAULT_TIMESPAN_DAYS = 90
 _TOKEN_ESTIMATE_CHARS = 4
 
 
@@ -41,7 +41,7 @@ class QueryKQLTool(BaseTool):
         assert isinstance(args, KqlInput)
         kql_query = args.query
         workspace_key = args.workspace
-        timespan_days = args.timespan_days
+        timespan_days = args.timespan_days or _DEFAULT_TIMESPAN_DAYS
 
         workspace_id = self._workspace_ids.get(workspace_key, self._workspace_ids["proproctor"])
 
