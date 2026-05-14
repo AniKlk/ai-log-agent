@@ -12,6 +12,7 @@ Works for any keyword: errors, disconnects, specific messages, etc.
 import logging
 import re
 from collections import Counter
+from typing import Literal
 
 from azure.cosmos.aio import CosmosClient
 from pydantic import BaseModel, Field
@@ -19,6 +20,59 @@ from pydantic import BaseModel, Field
 from app.tools.base import BaseTool
 
 logger = logging.getLogger(__name__)
+
+_BROAD_DISCONNECT_TERMS = {
+    "disconnect",
+    "disconnects",
+    "disconnected",
+    "disconnection",
+    "disconnections",
+}
+
+_EXPLICIT_DISCONNECT_ROLE_KEYWORDS = {
+    "candidate disconnected": "Candidate disconnected",
+    "proctor disconnected": "Proctor disconnected",
+    "readiness agent disconnected": "Readiness agent disconnected",
+}
+
+
+def _normalize_disconnect_keywords(
+    keywords: list[str],
+    disconnect_scope: Literal["auto", "candidate", "proctor", "readiness", "all"],
+) -> list[str]:
+    normalized = [kw.strip() for kw in keywords if kw and kw.strip()]
+    if not normalized:
+        return normalized
+
+    mentions_disconnect = any(
+        term in kw.lower()
+        for kw in normalized
+        for term in _BROAD_DISCONNECT_TERMS
+    )
+    explicit_roles_present = {
+        canonical
+        for kw in normalized
+        for phrase, canonical in _EXPLICIT_DISCONNECT_ROLE_KEYWORDS.items()
+        if phrase in kw.lower()
+    }
+    if explicit_roles_present:
+        return list(explicit_roles_present)
+
+    if not mentions_disconnect:
+        return normalized
+
+    if disconnect_scope == "all":
+        return ["disconnected"]
+    if disconnect_scope == "proctor":
+        return ["Proctor disconnected"]
+    if disconnect_scope == "readiness":
+        return ["Readiness agent disconnected"]
+    if disconnect_scope == "candidate":
+        return ["Candidate disconnected"]
+
+    # In auto mode, bias to candidate disconnects for any broad disconnect phrasing
+    # unless the caller explicitly asks for a different role through the scope parameter.
+    return ["Candidate disconnected"]
 
 
 def _keyword_conditions(keywords: list[str]) -> str:
@@ -74,6 +128,17 @@ class SessionLogStatsInput(BaseModel):
             "(case-insensitive). All keywords are OR'd together. "
             "Examples: ['unauthorised app', 'unauthorized app'], ['disconnect'], "
             "['system check failed'], ['error']."
+        ),
+    )
+    disconnect_scope: Literal["auto", "candidate", "proctor", "readiness", "all"] = Field(
+        "auto",
+        description=(
+            "How to interpret disconnect-related keywords. "
+            "'candidate' counts only candidate disconnects, "
+            "'proctor' counts only proctor disconnects, "
+            "'readiness' counts only readiness-agent disconnects, "
+            "'all' counts all roles, and "
+            "'auto' defaults broad disconnect terms to candidate disconnects."
         ),
     )
     min_hits: int = Field(
@@ -174,7 +239,11 @@ class GetSessionLogStatsTool(BaseTool):
         start_safe = args.start_date.replace("'", "''")
         end_safe = args.end_date.replace("'", "''")
 
-        keyword_conditions = _keyword_conditions(args.keywords)
+        effective_keywords = _normalize_disconnect_keywords(
+            args.keywords,
+            args.disconnect_scope,
+        )
+        keyword_conditions = _keyword_conditions(effective_keywords)
 
         # Fetch Metadata text when samples are requested; otherwise just the session id
         if args.include_metadata_samples:

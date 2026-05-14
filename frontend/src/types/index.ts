@@ -38,6 +38,11 @@ export interface AppInsightsLogRow {
 
 export interface AgentOutput {
   summary: string;
+  triage_status?: 'resolved' | 'monitoring' | 'needs_more_data' | 'escalate' | null;
+  customer_response?: string | null;
+  follow_up_questions?: string[];
+  recommended_actions?: string[];
+  escalation_target?: string | null;
   confirmation_codes?: string[];
   download_links?: Record<string, string>;
   per_confirmation_code_summaries?: Record<string, string>;

@@ -44,11 +44,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     _configure_logging(settings.LOG_LEVEL)
 
-    credential = DefaultAzureCredential()
-    openai_credential = ChainedTokenCredential(
-        AzureCliCredential(),
+    credential = ChainedTokenCredential(
+        AzureCliCredential(process_timeout=30),
         DefaultAzureCredential(exclude_azure_cli_credential=True),
     )
+    openai_credential = credential
 
     # --- Refreshing Azure AD token for OpenAI ---
     # Tokens expire after ~60 min; we cache and re-fetch when within 60 s of expiry.
@@ -132,7 +132,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await logs_client.close()
     await cosmos_client.close()
-    await openai_credential.close()
     await credential.close()
     await openai_client.close()
     logger.info("Application shutdown — clients closed")

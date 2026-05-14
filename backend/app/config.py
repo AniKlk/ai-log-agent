@@ -19,7 +19,12 @@ class Settings(BaseSettings):
     COSMOS_ENDPOINT: str
     COSMOS_KEY: str | None = None
 
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:3001"
+    CORS_ORIGINS: str = (
+        "http://localhost:3000,"
+        "http://localhost:3001,"
+        "http://127.0.0.1:3000,"
+        "http://127.0.0.1:3001"
+    )
     ANALYZE_TIMEOUT_SECONDS: int = 600
     MAX_AGENT_ITERATIONS: int = 10
     TOOL_RESPONSE_MAX_TOKENS: int = 40000

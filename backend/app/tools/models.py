@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 class LogEvent(BaseModel):
     timestamp: str
     message: str
-    type: Literal["info", "error", "disconnect"]
+    type: Literal["info", "warning", "error", "disconnect"]
     source: Literal["app-insights", "session-log", "infra"]
 
 

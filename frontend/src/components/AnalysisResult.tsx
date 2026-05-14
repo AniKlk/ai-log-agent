@@ -106,6 +106,20 @@ export function AnalysisResult({
   const confirmationCodes = collectConfirmationCodes(data);
   const appInsightsLogs = data.app_insights_logs || [];
   const appInsightsSummary = data.app_insights_summary || null;
+  const followUpQuestions = data.follow_up_questions || [];
+  const recommendedActions = data.recommended_actions || [];
+  const triageStatus = data.triage_status || null;
+
+  const triageColor =
+    triageStatus === 'resolved'
+      ? 'green'
+      : triageStatus === 'monitoring'
+        ? 'blue'
+        : triageStatus === 'needs_more_data'
+          ? 'yellow'
+          : triageStatus === 'escalate'
+            ? 'red'
+            : 'gray';
 
   const synthesizedLifecycleDetails = new Set<string>();
   for (const warning of data.warnings || []) {
@@ -373,6 +387,11 @@ export function AnalysisResult({
     // Summary sheet
     const summaryData = [
       ['Executive Summary', data.summary],
+      ['Triage Status', triageStatus || 'N/A'],
+      ['Customer Response', data.customer_response || 'N/A'],
+      ['Recommended Actions', recommendedActions.length > 0 ? recommendedActions.join(' | ') : 'N/A'],
+      ['Follow-up Questions', followUpQuestions.length > 0 ? followUpQuestions.join(' | ') : 'N/A'],
+      ['Escalation Target', data.escalation_target || 'N/A'],
       ['Root Cause', data.root_cause || 'N/A'],
       ['Confidence', data.root_cause_confidence || 'N/A'],
       ['Confirmation Codes', confirmationCodes.length > 0 ? confirmationCodes.join(', ') : 'N/A'],
@@ -696,6 +715,60 @@ export function AnalysisResult({
                     )}
                   </Group>
                   <Text size="sm">{data.root_cause}</Text>
+                </>
+              )}
+
+              {(triageStatus || data.customer_response || recommendedActions.length > 0 || followUpQuestions.length > 0 || data.escalation_target) && (
+                <>
+                  <Divider my="sm" />
+                  <Group mb="xs" gap="xs">
+                    <Text fw={600}>Support Triage</Text>
+                    {triageStatus && (
+                      <Badge color={triageColor} variant="filled" size="sm">
+                        {triageStatus.replaceAll('_', ' ')}
+                      </Badge>
+                    )}
+                  </Group>
+
+                  {data.customer_response && (
+                    <>
+                      <Text fw={500} size="sm" mb={4}>Customer Response</Text>
+                      <Text size="sm">{data.customer_response}</Text>
+                    </>
+                  )}
+
+                  {recommendedActions.length > 0 && (
+                    <>
+                      <Text fw={500} size="sm" mt="sm" mb={4}>Recommended Actions</Text>
+                      <Stack gap={4}>
+                        {recommendedActions.map((action, index) => (
+                          <Text key={`action-${index}`} size="sm">
+                            {index + 1}. {action}
+                          </Text>
+                        ))}
+                      </Stack>
+                    </>
+                  )}
+
+                  {followUpQuestions.length > 0 && (
+                    <>
+                      <Text fw={500} size="sm" mt="sm" mb={4}>Follow-up Questions</Text>
+                      <Stack gap={4}>
+                        {followUpQuestions.map((question, index) => (
+                          <Text key={`question-${index}`} size="sm">
+                            {index + 1}. {question}
+                          </Text>
+                        ))}
+                      </Stack>
+                    </>
+                  )}
+
+                  {data.escalation_target && (
+                    <>
+                      <Text fw={500} size="sm" mt="sm" mb={4}>Escalation Target</Text>
+                      <Text size="sm">{data.escalation_target}</Text>
+                    </>
+                  )}
                 </>
               )}
 

@@ -9,6 +9,7 @@ from app.agent.domain_knowledge import (
     mentions_platform,
     normalize_text,
 )
+from app.agent.operations_knowledge import build_knowledge_guidance
 from app.agent.schema_knowledge import get_all_valid_containers, get_container_info
 
 _CONFIRMATION_CODE_REGEX = re.compile(r"\b\d{16}\b")
@@ -221,6 +222,16 @@ def build_investigation_system_message(profile: InvestigationProfile) -> str:
             f"{', '.join(profile.related_services)}"
         )
 
+    knowledge_guidance = build_knowledge_guidance(
+        services=[*profile.services, *profile.related_services],
+        issue_types=profile.issue_types,
+        normalized_query=profile.normalized_query,
+    )
+    if knowledge_guidance:
+        lines.append("- Encoded operational knowledge loaded for this investigation:")
+        for hint in knowledge_guidance[:4]:
+            lines.append(f"  - {hint}")
+
     lines.extend(
         [
             "- Investigate in loops: exact match -> widen time window -> inspect adjacent "
@@ -332,7 +343,7 @@ def build_investigation_system_message(profile: InvestigationProfile) -> str:
             "for 'lockdown', 'Ipc', 'blocked', 'deny-list', 'unauthorized application', 'failed to kill process', 'failed to kill app', and 'failed to kill' keywords. "
             "When present, extract and report the app/process name that failed to terminate."
         )
-    if any(token in normalized for token in ("pod", "crash", "restart", "container", "kubernetes", "infra", "oom", "memory")):
+    if any(token in normalized for token in ("pod", "crash", "restart", "container", "kubernetes", "infra", "oom", "memory", "security", "lockdown", "bypass", "unauthorized")):
         lines.append(
             "- Infrastructure intent: use infrastructure workspace (KubeEvents, ContainerLogV2, KubePodInventory). "
             "Search for pod status (CrashLoopBackOff, Pending, Failed) and resource pressure (OOMKilling, MemoryPressure)."

@@ -9,6 +9,8 @@ import { AnalysisResult } from '@/components/AnalysisResult';
 import { analyzeQuery } from '@/services/api';
 import type { AnalyzeResponse, ConversationMessage } from '@/types';
 
+const CONFIRMATION_CODE_REGEX = /\b\d{16}\b/g;
+
 export default function Home() {
   const [response, setResponse] = useState<AnalyzeResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -17,16 +19,25 @@ export default function Home() {
   const handleSubmit = async (query: string) => {
     setLoading(true);
     try {
-      const history = conversationHistory.length > 0 ? conversationHistory : undefined;
+      const requestedCodes = query.match(CONFIRMATION_CODE_REGEX) || [];
+      const isExplicitSessionQuery = requestedCodes.length > 0;
+      const history =
+        !isExplicitSessionQuery && conversationHistory.length > 0
+          ? conversationHistory
+          : undefined;
       const res = await analyzeQuery(query, history);
       setResponse(res);
 
       // Accumulate ordered turns: user question -> assistant answer
-      setConversationHistory([
-        ...conversationHistory,
+      const nextHistory: ConversationMessage[] = [
         { role: 'user' as const, content: query },
         { role: 'assistant' as const, content: JSON.stringify(res.answer) },
-      ]);
+      ];
+      setConversationHistory(
+        isExplicitSessionQuery
+          ? nextHistory
+          : [...conversationHistory, ...nextHistory],
+      );
     } finally {
       setLoading(false);
     }
@@ -47,7 +58,7 @@ export default function Home() {
                 fw={600}
                 style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 32 }}
               >
-                Investigate
+                AI Support Analyst
               </Title>
 
               <QueryInput

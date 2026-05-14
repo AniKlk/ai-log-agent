@@ -8,13 +8,27 @@ Returns per-confirmation-code disconnect counts and summary totals.
 """
 import logging
 from collections import Counter
+from typing import Literal
 
 from azure.cosmos.aio import CosmosClient
 from pydantic import BaseModel, Field
 
 from app.tools.base import BaseTool
+from app.tools.session_log_stats import _normalize_disconnect_keywords
 
 logger = logging.getLogger(__name__)
+
+
+def _disconnect_keywords_for_scope(
+    disconnect_scope: Literal["candidate", "proctor", "readiness", "all"],
+) -> list[str]:
+    if disconnect_scope == "proctor":
+        return ["Proctor disconnected"]
+    if disconnect_scope == "readiness":
+        return ["Readiness agent disconnected"]
+    if disconnect_scope == "all":
+        return ["disconnected"]
+    return ["Candidate disconnected"]
 
 
 class DisconnectStatsInput(BaseModel):
@@ -37,11 +51,20 @@ class DisconnectStatsInput(BaseModel):
         2,
         description="Minimum number of disconnect events to include in results. Default 2.",
     )
+    disconnect_scope: Literal["auto", "candidate", "proctor", "readiness", "all"] = Field(
+        "auto",
+        description=(
+            "Which role's disconnects to count. "
+            "Default 'auto' treats broad disconnect queries as candidate-only, "
+            "avoiding proctor or readiness-agent inflation."
+        ),
+    )
     disconnect_keywords: list[str] = Field(
-        default=["disconnect"],
+        default_factory=lambda: ["disconnect"],
         description=(
             "Substrings (case-insensitive) to match in session-log Entries.Metadata "
-            "to identify a disconnect event. Default: ['disconnect']."
+            "to identify a disconnect event. "
+            "Defaults to a broad disconnect phrase, then is normalized by disconnect_scope."
         ),
     )
 
@@ -110,9 +133,16 @@ class GetDisconnectStatsTool(BaseTool):
         start_safe = args.start_date.replace("'", "''")
         end_safe = args.end_date.replace("'", "''")
 
+        effective_keywords = _normalize_disconnect_keywords(
+            args.disconnect_keywords
+            if args.disconnect_keywords
+            else _disconnect_keywords_for_scope("candidate"),
+            args.disconnect_scope,
+        )
+
         keyword_conditions = " OR ".join(
             f"CONTAINS(LOWER(e.Metadata), '{kw.lower().replace(chr(39), chr(39)+chr(39))}')"
-            for kw in args.disconnect_keywords
+            for kw in effective_keywords
         )
 
         q2 = (

@@ -70,7 +70,7 @@ def test_system_message_includes_sessionlog_schema_guardrails_for_term_queries()
 
     message = build_investigation_system_message(profile)
 
-    assert "SessionLogType values" in message
+    assert "SessionLogType codes" in message
     assert "fatality 'not terminate'" in message
 
 
@@ -96,3 +96,26 @@ def test_query_cosmos_rows_for_teststatus_completed_returns_signal_observation()
     assert observation is not None
     assert observation.status == "signal"
     assert "TestStatus completed rows" in observation.summary
+
+
+def test_system_message_includes_encoded_operational_knowledge() -> None:
+    profile = build_investigation_profile(
+        "agent cannot accept candidate, keeps requeuing in candidate app"
+    )
+
+    message = build_investigation_system_message(profile)
+
+    assert "Encoded operational knowledge loaded" in message
+    assert "Operational service catalog" in message
+    assert "Deterministic issue workflow" in message
+
+
+def test_system_message_includes_mandatory_troubleshooting_process() -> None:
+    profile = build_investigation_profile(
+        "candidate disconnected multiple times and timeout spikes in exam sessions api"
+    )
+
+    message = build_investigation_system_message(profile)
+
+    assert "Mandatory troubleshooting process" in message
+    assert "Deterministic issue workflow" in message

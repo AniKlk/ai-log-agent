@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Finding(BaseModel):
@@ -38,21 +38,26 @@ class AppInsightsSummary(BaseModel):
     marker_events: int = 0
     non_marker_events: int = 0
     error_records: int = 0
-    top_error_signatures: list[str] = []
+    top_error_signatures: list[str] = Field(default_factory=list)
 
 
 class AgentOutput(BaseModel):
     summary: str
-    confirmation_codes: list[str] = []
-    download_links: dict[str, str] = {}
-    per_confirmation_code_summaries: dict[str, str] = {}
-    key_findings: list[Finding] = []
+    triage_status: Literal["resolved", "monitoring", "needs_more_data", "escalate"] | None = None
+    customer_response: str | None = None
+    follow_up_questions: list[str] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+    escalation_target: str | None = None
+    confirmation_codes: list[str] = Field(default_factory=list)
+    download_links: dict[str, str] = Field(default_factory=dict)
+    per_confirmation_code_summaries: dict[str, str] = Field(default_factory=dict)
+    key_findings: list[Finding] = Field(default_factory=list)
     root_cause: str | None = None
     root_cause_confidence: Literal["confirmed", "probable", "uncertain"] | None = None
-    timeline: list[TimelineEntry] = []
+    timeline: list[TimelineEntry] = Field(default_factory=list)
     app_insights_summary: AppInsightsSummary | None = None
-    app_insights_logs: list[AppInsightsLogRow] = []
+    app_insights_logs: list[AppInsightsLogRow] = Field(default_factory=list)
     source_summary: SourceSummary | None = None
-    per_confirmation_code_source_summary: dict[str, SourceSummary] = {}
-    tools_invoked: list[str] = []
+    per_confirmation_code_source_summary: dict[str, SourceSummary] = Field(default_factory=dict)
+    tools_invoked: list[str] = Field(default_factory=list)
     warnings: list[str | None] | None = None

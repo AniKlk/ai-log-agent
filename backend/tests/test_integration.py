@@ -44,6 +44,11 @@ def _final_answer(**kwargs: Any) -> MagicMock:
     """Simulate a finish_reason=stop LLM response."""
     payload = {
         "summary": kwargs.get("summary", "Session completed normally."),
+        "triage_status": kwargs.get("triage_status", None),
+        "customer_response": kwargs.get("customer_response", None),
+        "follow_up_questions": kwargs.get("follow_up_questions", []),
+        "recommended_actions": kwargs.get("recommended_actions", []),
+        "escalation_target": kwargs.get("escalation_target", None),
         "confirmation_codes": kwargs.get("confirmation_codes", []),
         "key_findings": kwargs.get("key_findings", []),
         "timeline": kwargs.get("timeline", []),

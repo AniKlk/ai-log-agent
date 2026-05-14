@@ -1,0 +1,706 @@
+{
+  "service_catalog": [
+    {
+      "service": "candidate-app",
+      "purpose": "Candidate-facing exam runtime and lockdown client telemetry.",
+      "workspace": "proproctor",
+      "resource_id_contains": "app-proproctor-candidate-app",
+      "common_tables": ["AppTraces", "AppExceptions", "AppEvents"],
+      "key_operations": [
+        "set confirmation code",
+        "logged into application",
+        "ipc server action received: exit",
+        "content protection bypassed",
+        "error"
+      ],
+      "correlation_identifiers": [
+        "ConfirmationCode",
+        "ExamSessionId",
+        "operation_Id",
+        "session_Id"
+      ],
+      "depends_on": ["exam-sessions-api", "identity-service", "conferences-api", "chat-api"]
+    },
+    {
+      "service": "exam-sessions-api",
+      "purpose": "Session orchestration, lifecycle state transitions, and exam metadata persistence.",
+      "workspace": "proproctor",
+      "resource_id_contains": "app-proproctor-exam-sessions-api",
+      "common_tables": ["AppTraces", "AppExceptions", "AppRequests", "AppDependencies"],
+      "key_operations": [
+        "session update",
+        "session completion",
+        "cosmos dependency",
+        "request failure"
+      ],
+      "correlation_identifiers": ["ExamSessionId", "ConfirmationCode", "operation_Id"],
+      "depends_on": ["candidate-app", "assignments-api", "events-broker"]
+    },
+    {
+      "service": "assignments-api",
+      "purpose": "Proctor assignment and assignment lifecycle transitions.",
+      "workspace": "proproctor",
+      "resource_id_contains": "app-proproctor-assignments-api",
+      "common_tables": ["AppTraces", "AppExceptions", "AppEvents"],
+      "key_operations": ["assignment created", "assignment active", "assignment cancelled"],
+      "correlation_identifiers": ["ExamSessionId", "AssignmentId", "ConfirmationCode"],
+      "depends_on": ["exam-sessions-api"]
+    },
+    {
+      "service": "conferences-api",
+      "purpose": "Conference room lifecycle and Twilio room orchestration.",
+      "workspace": "proproctor",
+      "resource_id_contains": "app-proproctor-conferences-api",
+      "common_tables": ["AppTraces", "AppExceptions", "AppEvents"],
+      "key_operations": ["room create", "room join", "room leave", "room complete"],
+      "correlation_identifiers": ["ExamSessionId", "RoomName", "ConferenceId"],
+      "depends_on": ["exam-sessions-api", "candidate-app"]
+    },
+    {
+      "service": "chat-api",
+      "purpose": "Candidate/proctor messaging and support communication data.",
+      "workspace": "proproctor",
+      "resource_id_contains": "app-proproctor-chat-api",
+      "common_tables": ["AppTraces", "AppExceptions", "AppEvents"],
+      "key_operations": ["message send", "message delivery", "chat transcript"],
+      "correlation_identifiers": ["ExamSessionId", "FromUserRole", "ConfirmationCode"],
+      "depends_on": ["candidate-app", "exam-sessions-api"]
+    },
+    {
+      "service": "infrastructure",
+      "purpose": "Kubernetes runtime health, pod lifecycle, and container-level events.",
+      "workspace": "infrastructure",
+      "resource_id_contains": "aks",
+      "common_tables": ["KubeEvents", "ContainerLogV2", "KubePodInventory"],
+      "key_operations": ["pod scheduling", "readiness probe", "container restart", "oom kill"],
+      "correlation_identifiers": ["PodName", "ContainerName", "Namespace"],
+      "depends_on": ["candidate-app", "exam-sessions-api", "events-broker"]
+    }
+  ],
+  "event_taxonomy": [
+    {
+      "event_type": "candidate_disconnect",
+      "aliases": ["candidate disconnected", "candidate disconnect", "disconnect issues"],
+      "primary_signals": [
+        "SessionLogType=7 candidate rows",
+        "Entries.Metadata contains 'Candidate disconnected'",
+        "candidate-app network/socket disconnect traces"
+      ],
+      "tables": ["ExamSession/session-log", "AppTraces"],
+      "default_scope": "candidate"
+    },
+    {
+      "event_type": "proctor_disconnect",
+      "aliases": ["proctor disconnected", "proctor disconnect"],
+      "primary_signals": ["Entries.Metadata contains 'Proctor disconnected'"],
+      "tables": ["ExamSession/session-log"],
+      "default_scope": "proctor"
+    },
+    {
+      "event_type": "readiness_agent_disconnect",
+      "aliases": ["readiness disconnected", "readiness agent disconnected"],
+      "primary_signals": ["Entries.Metadata contains 'Readiness agent disconnected'"],
+      "tables": ["ExamSession/session-log"],
+      "default_scope": "readiness"
+    },
+    {
+      "event_type": "security_violation",
+      "aliases": ["lockdown bypass", "content protection bypassed", "security violation"],
+      "primary_signals": [
+        "SessionLogType in (13,14)",
+        "candidate-app security marker",
+        "content protection bypassed"
+      ],
+      "tables": ["ExamSession/session-log", "AppTraces", "AppEvents"],
+      "default_scope": "candidate"
+    },
+    {
+      "event_type": "relogin_failure",
+      "aliases": ["relogin failed", "cannot relogin", "login failed"],
+      "primary_signals": [
+        "set confirmation code markers without stable follow-up session flow",
+        "identity/auth traces with unauthorized or token failures"
+      ],
+      "tables": ["AppTraces", "AppExceptions", "ExamSession/session-log"],
+      "default_scope": "candidate"
+    },
+    {
+      "event_type": "assignment_issue",
+      "aliases": ["assignment issue", "proctor assignment failed"],
+      "primary_signals": [
+        "AssignmentStatus mismatch across expected lifecycle",
+        "conference room active but no active assignment"
+      ],
+      "tables": ["Assignment/assignment", "PPR.Conferences/conference", "AppTraces"],
+      "default_scope": "session"
+    },
+    {
+      "event_type": "backend_timeout",
+      "aliases": ["timeout", "timed out", "backend timeout", "dependency timeout"],
+      "primary_signals": [
+        "AppRequests result codes 408/429/5xx",
+        "AppDependencies Success=false or timeout",
+        "exam-sessions-api timeout traces"
+      ],
+      "tables": ["AppRequests", "AppDependencies", "AppTraces"],
+      "default_scope": "service"
+    },
+    {
+      "event_type": "agent_unable_to_accept",
+      "aliases": ["cannot accept candidate", "agent can't accept", "not accepting", "agent accept failure", "proctor couldn't accept"],
+      "primary_signals": [
+        "AppTraces on assignments-api for task accept or requeue events",
+        "Assignment/assignment AssignmentStatus stuck in Pending or Queued",
+        "AppDependencies failure on Twilio task acceptance call"
+      ],
+      "tables": ["AppTraces", "AppDependencies", "Assignment/assignment"],
+      "default_scope": "session"
+    },
+    {
+      "event_type": "audio_issue",
+      "aliases": ["no audio", "one-way audio", "can't hear", "audio problem", "audio issue", "microphone issue", "speaker issue"],
+      "primary_signals": [
+        "AppTraces on candidate-app for media init or audio error",
+        "AppDependencies failure on conference/Twilio media API",
+        "PPR.Conferences participant media state"
+      ],
+      "tables": ["AppTraces", "AppDependencies", "PPR.Conferences/conference"],
+      "default_scope": "candidate"
+    },
+    {
+      "event_type": "chat_issue",
+      "aliases": ["chat not working", "messages not sent", "chat delay", "message not received", "chat problem"],
+      "primary_signals": [
+        "getChatHistory message timestamps showing gaps or no messages",
+        "AppDependencies failure on chat-api downstream calls",
+        "AppTraces on chat-api for message delivery errors"
+      ],
+      "tables": ["ExamChat/exam-chat", "AppTraces", "AppDependencies"],
+      "default_scope": "session"
+    },
+    {
+      "event_type": "blank_screen",
+      "aliases": ["blank screen", "black screen", "frozen screen", "white screen", "screen not loading"],
+      "primary_signals": [
+        "AppTraces on candidate-app for initialization or render failure at session start",
+        "AppExceptions on candidate-app for unhandled frontend exceptions"
+      ],
+      "tables": ["AppTraces", "AppExceptions"],
+      "default_scope": "candidate"
+    },
+    {
+      "event_type": "duplicate_session",
+      "aliases": ["duplicate session", "two proctors", "multiple proctors", "more than one proctor", "two agents in room"],
+      "primary_signals": [
+        "PPR.Conferences/conference: role0 with more than one active role1/role2 participant",
+        "Assignment/assignment: multiple Active records against same ExamSessionId"
+      ],
+      "tables": ["PPR.Conferences/conference", "Assignment/assignment"],
+      "default_scope": "session"
+    },
+    {
+      "event_type": "duplicate_task_requeue",
+      "aliases": ["duplicate task", "requeue loop", "ghost task", "stuck in queue", "keeps requeuing"],
+      "primary_signals": [
+        "AppTraces on assignments-api: repeated task create or requeue on same ExamSessionId",
+        "Assignment/assignment: multiple records in non-terminal state for same ExamSessionId"
+      ],
+      "tables": ["AppTraces", "AppDependencies", "Assignment/assignment"],
+      "default_scope": "session"
+    },
+    {
+      "event_type": "kill_session_failure",
+      "aliases": ["failed to kill", "kill session failed", "process not killed", "couldn't end session", "session won't close"],
+      "primary_signals": [
+        "AppTraces on candidate-app: 'Failed to kill process' or 'failed to kill app'",
+        "Session-log Entries.Metadata for kill-related events"
+      ],
+      "tables": ["AppTraces", "ExamSession/session-log"],
+      "default_scope": "candidate"
+    }
+  ],
+  "troubleshooting_playbooks": [
+    {
+      "symptom": "agent unable to accept candidate",
+      "tags": ["assignment_issue", "requeue", "agent_accept"],
+      "detection": "No transition to accepted state; repeated requeue observed",
+      "likely_causes": [
+        "Agent (proctor) disconnect before accepting",
+        "Backend retry loop in assignment service",
+        "Twilio task state mismatch preventing acceptance"
+      ],
+      "data_sources": ["AppTraces", "AppDependencies", "ExamChat/exam-chat"],
+      "signals_to_check": [
+        "AppTraces on assignments-api for repeated task accept failures or requeue events",
+        "AppDependencies failures on Twilio task creation or acceptance calls",
+        "getChatHistory for proctor-side communication gaps",
+        "Assignment/assignment for AssignmentStatus stuck in non-Active state"
+      ],
+      "escalation_guidance": "Escalate to AAT if assignment stays in requeue loop beyond expected SLA or if proctor disconnected permanently.",
+      "escalation_target": "AAT"
+    },
+    {
+      "symptom": "candidate audio issues",
+      "tags": ["audio", "media", "candidate_audio"],
+      "detection": "Candidate or proctor reports no audio / one-way audio during session",
+      "likely_causes": [
+        "Media initialization failure in candidate app",
+        "Dependency failure on conference/media service",
+        "Browser media permissions not granted"
+      ],
+      "data_sources": ["AppTraces (candidate-app)", "ExamChat/exam-chat", "AppDependencies"],
+      "signals_to_check": [
+        "AppTraces on candidate-app for media init or audio error messages",
+        "AppDependencies for conference/Twilio media call failures",
+        "getChatHistory for proctor/candidate messages reporting audio issues",
+        "PPR.Conferences/conference for room state and participant join/leave events"
+      ],
+      "escalation_guidance": "Escalate to platform team if dependency failures are systemic across multiple sessions in same window.",
+      "escalation_target": "conferences-api"
+    },
+    {
+      "symptom": "chat issues",
+      "tags": ["chat", "messaging", "chat_issue"],
+      "detection": "Messages not delivered or delayed between candidate and proctor",
+      "likely_causes": [
+        "Messaging pipeline failure or delay",
+        "Chat service dependency failure",
+        "EventHub/ServiceBus delivery lag"
+      ],
+      "data_sources": ["ExamChat/exam-chat", "AppDependencies", "AppTraces"],
+      "signals_to_check": [
+        "getChatHistory to verify messages exist and timestamps for delivery gaps",
+        "AppDependencies on chat-api for downstream failures",
+        "AppTraces on chat-api for message delivery errors",
+        "Check KB PRT0810 (ServiceBus Queues) for queue health patterns"
+      ],
+      "escalation_guidance": "Escalate if chat service shows systemic delivery failures or ServiceBus queue depth abnormalities.",
+      "escalation_target": "chat-api"
+    },
+    {
+      "symptom": "blank screen issues",
+      "tags": ["blank_screen", "app_load", "init_failure"],
+      "detection": "Candidate reports blank/frozen screen at app launch or during session",
+      "likely_causes": [
+        "App load or initialization failure in candidate app",
+        "JavaScript/frontend render error",
+        "Backend session load failure blocking app startup"
+      ],
+      "data_sources": ["AppTraces (candidate-app)", "AppExceptions"],
+      "signals_to_check": [
+        "AppTraces on candidate-app for initialization or load errors around session start time",
+        "AppExceptions on candidate-app for unhandled render exceptions",
+        "Session timeline for login marker presence vs expected startup flow",
+        "getSessionData for session metadata to confirm session was actually created"
+      ],
+      "escalation_guidance": "Escalate to candidate-app team if blank screen occurs at login consistently or correlates with a deploy.",
+      "escalation_target": "candidate-app"
+    },
+    {
+      "symptom": "duplicate session / multiple proctors",
+      "tags": ["duplicate_session", "conference", "multi_proctor"],
+      "detection": "Conference room has role0 (candidate) assigned to more than one role1/role2 (proctor)",
+      "likely_causes": [
+        "Assignment service retry created second assignment without closing first",
+        "Stale Twilio task accepted by second agent after first accepted"
+      ],
+      "data_sources": ["PPR.Conferences/conference"],
+      "signals_to_check": [
+        "Query PPR.Conferences/conference for Room SID and participant metadata: validate role0 appears once and role1/role2 count",
+        "Assignment/assignment for multiple Active or Assigned records against same ExamSessionId",
+        "AppTraces on assignments-api for duplicate task creation events"
+      ],
+      "output": "Extract Room SID and confirm role count. If role0 -> >1 role1/role2 confirmed, collect Room SID + ConfirmationCode + Timestamp and escalate to AAT.",
+      "escalation_guidance": "ALWAYS escalate duplicate sessions to AAT with Room SID, ConfirmationCode, participant metadata, and log evidence.",
+      "escalation_target": "AAT"
+    },
+    {
+      "symptom": "duplicate tasks / requeue loops",
+      "tags": ["duplicate_task", "requeue", "assignment_loop"],
+      "detection": "Same candidate session appears as multiple Twilio tasks in requeue cycle",
+      "likely_causes": [
+        "Assignment loop due to task not being cancelled before new task creation",
+        "Backend retry creating duplicate tasks on failure"
+      ],
+      "data_sources": ["AppTraces", "AppDependencies"],
+      "signals_to_check": [
+        "AppTraces on assignments-api for repeated task create or requeue patterns on same ExamSessionId",
+        "AppDependencies for Twilio task API repeated calls in short window",
+        "Assignment/assignment for multiple records with same ExamSessionId in non-terminal state",
+        "Check KB PRT0849 (Removing Task/Session) and PRT0933 (Ghost Tasks) for remediation steps"
+      ],
+      "escalation_guidance": "Escalate to AAT for ghost task cleanup. Reference KB PRT0933 for ghost tasks and PRT0849 for task/session removal.",
+      "escalation_target": "AAT"
+    },
+    {
+      "symptom": "kill session failures",
+      "tags": ["kill_session", "failed_to_kill", "orphaned_process"],
+      "detection": "Backend reports 'Failed to kill process' for one or more applications in session",
+      "likely_causes": [
+        "Orphaned process that did not respond to kill signal",
+        "Backend failure executing process termination",
+        "Lockdown service lost connection before kill completed"
+      ],
+      "data_sources": ["AppTraces (candidate-app)"],
+      "signals_to_check": [
+        "AppTraces on candidate-app: search for 'Failed to kill process' or 'failed to kill app' to identify which process name failed",
+        "Session-log Entries.Metadata for kill-related events around same timestamp",
+        "getSessionTimeline for process signal context before/after failure"
+      ],
+      "escalation_guidance": "Escalate to AAT if kill failure resulted in session not completing cleanly. Reference KB PRT0849 for session removal steps.",
+      "escalation_target": "AAT"
+    }
+  ],
+  "known_false_positives": [
+    {
+      "signal": "Twilio task.deleted / reservation acceptance noise",
+      "guidance": "Treat as potentially benign unless correlated with assignment failure for the same session."
+    },
+    {
+      "signal": "Single pod warning without downstream candidate impact",
+      "guidance": "Do not claim root cause from infra-only evidence; require session impact correlation."
+    },
+    {
+      "signal": "ApplicationBlock without explicit failure markers",
+      "guidance": "Interpret in deny-list/security context; avoid classifying as exam failure by default."
+    },
+    {
+      "signal": "GW 'not terminate' outcomes",
+      "guidance": "Treat as informational by default; only escalate if terminate behavior or session disruption appears."
+    }
+  ],
+  "architecture_relationships": [
+    {
+      "from": "candidate-app",
+      "to": "exam-sessions-api",
+      "relationship": "session lifecycle and heartbeat orchestration"
+    },
+    {
+      "from": "candidate-app",
+      "to": "identity-service",
+      "relationship": "authentication and relogin token flow"
+    },
+    {
+      "from": "candidate-app",
+      "to": "conferences-api",
+      "relationship": "video room join/leave"
+    },
+    {
+      "from": "exam-sessions-api",
+      "to": "events-broker",
+      "relationship": "session lifecycle event publication"
+    },
+    {
+      "from": "assignments-api",
+      "to": "exam-sessions-api",
+      "relationship": "proctor assignment linked to session"
+    },
+    {
+      "from": "all services",
+      "to": "infrastructure",
+      "relationship": "AKS pod scheduling and runtime health dependency"
+    }
+  ],
+  "ingestion_templates": {
+    "service_catalog_template": {
+      "service": "service-name",
+      "purpose": "What this service owns",
+      "workspace": "proproctor|infrastructure",
+      "resource_id_contains": "app-proproctor-service-name",
+      "common_tables": ["AppTraces"],
+      "key_operations": ["operation name"],
+      "correlation_identifiers": ["ConfirmationCode", "ExamSessionId"],
+      "depends_on": ["upstream-or-downstream-service"]
+    },
+    "event_taxonomy_template": {
+      "event_type": "issue_or_event_name",
+      "aliases": ["user phrase"],
+      "primary_signals": ["exact deterministic signal"],
+      "tables": ["ExamSession/session-log"],
+      "default_scope": "candidate|proctor|readiness|session|service"
+    },
+    "playbook_template": {
+      "symptom": "what support sees",
+      "tags": ["issue-tag"],
+      "likely_causes": ["ordered likely causes"],
+      "signals_to_check": ["tool/query checks"],
+      "escalation_guidance": "when to escalate",
+      "escalation_target": "team-or-service"
+    }
+  },
+  "standard_troubleshooting_process": [
+    {
+      "step": 1,
+      "name": "Identify issue",
+      "objective": "Classify the reported symptom against the known issue taxonomy before pulling any data.",
+      "required_checks": [
+        "Match the user-reported symptom to a core issue type (agent accept, audio, chat, blank screen, duplicate session, duplicate task, kill failure)",
+        "Lock investigation to explicit ConfirmationCode or ExamSessionId before running broad queries"
+      ]
+    },
+    {
+      "step": 2,
+      "name": "Pull logs",
+      "objective": "Gather all relevant data sources in parallel: Chat, App logs, Traces, Dependencies, Conference DB.",
+      "required_checks": [
+        "Run getSessionData (App Insights + session-log + infra), getChatHistory, getSessionTimeline",
+        "Query PPR.Conferences/conference for Room SID and participant metadata when session or duplicate issues are suspected",
+        "Query Assignment/assignment for assignment state",
+        "Query AppTraces and AppDependencies for the relevant service"
+      ]
+    },
+    {
+      "step": 3,
+      "name": "Reconstruct timeline",
+      "objective": "Build a chronological sequence of events from all gathered data.",
+      "required_checks": [
+        "Merge events from App Insights, session-log, chat, conference DB in timestamp order",
+        "Identify gaps or anomalies in expected session flow"
+      ]
+    },
+    {
+      "step": 4,
+      "name": "Detect anomaly",
+      "objective": "Identify the specific signal that deviates from normal session behavior.",
+      "required_checks": [
+        "Cross-reference reconstructed timeline against expected lifecycle markers",
+        "Flag unexpected events: requeue, duplicate role, failed kill, missing login marker, media init failure"
+      ]
+    },
+    {
+      "step": 5,
+      "name": "Confirm root cause",
+      "objective": "Validate the anomaly against the deterministic issue workflow for the classified issue type.",
+      "required_checks": [
+        "Use the deterministic workflow for the identified issue type",
+        "Do not claim root cause without matching deterministic signal evidence",
+        "For duplicate sessions: confirm role count from Conference DB before escalating"
+      ]
+    },
+    {
+      "step": 6,
+      "name": "Prepare evidence",
+      "objective": "Package the evidence needed for resolution or escalation.",
+      "required_checks": [
+        "Collect Room SID, ConfirmationCode, Timestamp for AAT escalations",
+        "Attach participant metadata, relevant log/trace excerpts",
+        "Write a concise summary suitable for the support ticket"
+      ]
+    },
+    {
+      "step": 7,
+      "name": "Escalate if needed",
+      "objective": "Submit to AAT or platform team with complete evidence when issue matches escalation triggers.",
+      "required_checks": [
+        "AAT triggers: duplicate sessions, kill failures, assignment inconsistencies",
+        "Include Room SID + ConfirmationCode + Timestamp + participant metadata + logs",
+        "Reference applicable KB article (PRT0920, PRT0842, PRT0849, PRT0810, PRT0933)"
+      ]
+    }
+  ],
+  "deterministic_issue_workflows": [
+    {
+      "issue_type": "relogin_failure",
+      "when_query_contains": ["relogin", "login failed", "cannot relogin"],
+      "required_checks": [
+        "Candidate login markers: set confirmation code / confirmation code set",
+        "Identity/auth failure traces in AppTraces/AppExceptions",
+        "Session continuity after login marker in timeline"
+      ],
+      "recommended_tools": ["getSessionData", "getSessionTimeline", "queryKQL"],
+      "guardrail": "Do not classify as relogin failure unless login marker is followed by explicit auth/session failure evidence."
+    },
+    {
+      "issue_type": "assignment_issue",
+      "when_query_contains": ["assignment", "proctor assignment", "not assigned"],
+      "required_checks": [
+        "AssignmentStatus progression in Assignment/assignment",
+        "Conference room status consistency",
+        "Events broker traces for assignment delivery lag"
+      ],
+      "recommended_tools": ["getSessionData", "queryCosmos", "queryKQL"],
+      "guardrail": "Do not blame assignment service without mismatch between assignment state and candidate session flow."
+    },
+    {
+      "issue_type": "security_violation",
+      "when_query_contains": ["security", "lockdown", "content protection", "bypass"],
+      "required_checks": [
+        "SessionLogType 13/14 and candidate-app security markers",
+        "Differentiate security alert vs enforced termination",
+        "Validate user impact in timeline/chat context"
+      ],
+      "recommended_tools": ["getSessionData", "getSessionTimeline", "queryKQL"],
+      "escalation_target": "PRT",
+      "consult": "Security team — share evidence before resolving",
+      "guardrail": "Do not claim exam failure from security markers alone without session disruption evidence."
+    },
+    {
+      "issue_type": "backend_timeout",
+      "when_query_contains": ["timeout", "timed out", "dependency timeout", "5xx"],
+      "required_checks": [
+        "AppRequests result codes 408/429/5xx",
+        "AppDependencies timeout/failure correlation",
+        "Infrastructure pressure in same time window"
+      ],
+      "recommended_tools": ["getSessionData", "queryKQL", "getSessionLogStats"],
+      "guardrail": "Do not attribute candidate impact from backend timeout unless session-level evidence aligns temporally."
+    },
+    {
+      "issue_type": "agent_unable_to_accept",
+      "when_query_contains": ["cannot accept candidate", "agent can't accept", "not accepting", "agent accept failure", "proctor couldn't accept"],
+      "required_checks": [
+        "AppTraces on assignments-api for task accept failures, cancellations, or requeue events against the ExamSessionId",
+        "AppDependencies for Twilio task API failures during acceptance window",
+        "Assignment/assignment for AssignmentStatus stuck in Pending/Queued",
+        "getChatHistory for proctor messages about inability to accept"
+      ],
+      "recommended_tools": ["getSessionData", "queryCosmos", "queryKQL", "getChatHistory"],
+      "guardrail": "Do not confirm agent accept failure without AppTraces or assignment state evidence showing non-acceptance."
+    },
+    {
+      "issue_type": "audio_issue",
+      "when_query_contains": ["no audio", "one-way audio", "can't hear", "audio problem", "audio issue", "microphone", "speaker issue"],
+      "required_checks": [
+        "AppTraces on candidate-app for media initialization errors or audio device failures",
+        "AppDependencies for conference/Twilio media API call failures",
+        "PPR.Conferences/conference for participant join events and media state",
+        "getChatHistory for reports from proctor or candidate about audio"
+      ],
+      "recommended_tools": ["getSessionData", "queryCosmos", "queryKQL", "getChatHistory"],
+      "guardrail": "Do not attribute audio failure to platform without ruling out candidate device/browser configuration."
+    },
+    {
+      "issue_type": "chat_issue",
+      "when_query_contains": ["chat not working", "messages not sent", "chat delay", "chat problem", "message not received"],
+      "required_checks": [
+        "getChatHistory to verify whether messages exist and check delivery timestamps",
+        "AppDependencies on chat-api for downstream call failures",
+        "AppTraces on chat-api for message delivery errors",
+        "ServiceBus queue health for message delivery lag (KB PRT0810)"
+      ],
+      "recommended_tools": ["getChatHistory", "queryKQL"],
+      "guardrail": "First check getChatHistory to determine if messages actually exist before claiming platform failure."
+    },
+    {
+      "issue_type": "blank_screen",
+      "when_query_contains": ["blank screen", "black screen", "frozen screen", "white screen", "screen not loading"],
+      "required_checks": [
+        "AppTraces on candidate-app for initialization, render, or load errors near session start time",
+        "AppExceptions on candidate-app for unhandled frontend exceptions",
+        "Session timeline for expected login markers vs actual startup sequence",
+        "getSessionData to confirm session was created on backend"
+      ],
+      "recommended_tools": ["getSessionData", "getSessionTimeline", "queryKQL"],
+      "guardrail": "Distinguish between session not created (backend issue) vs session created but app failed to render (frontend issue)."
+    },
+    {
+      "issue_type": "duplicate_session",
+      "when_query_contains": ["duplicate session", "two proctors", "multiple proctors", "more than one proctor", "two agents", "two rooms"],
+      "required_checks": [
+        "Query PPR.Conferences/conference for Room SID and count participants by role: role0=candidate, role1/role2=proctor",
+        "If role0 appears with more than one active role1/role2, duplicate session is confirmed",
+        "Query Assignment/assignment for multiple Active records against same ExamSessionId",
+        "AppTraces on assignments-api for duplicate task creation"
+      ],
+      "recommended_tools": ["queryCosmos", "queryKQL"],
+      "output": "Extract Room SID, ConfirmationCode, Timestamp, participant metadata.",
+      "escalation_required": true,
+      "guardrail": "ALWAYS escalate to AAT when duplicate session is confirmed. Do not attempt to resolve without AAT involvement."
+    },
+    {
+      "issue_type": "duplicate_task_requeue",
+      "when_query_contains": ["duplicate task", "requeue loop", "ghost task", "stuck in queue", "keeps requeuing"],
+      "required_checks": [
+        "AppTraces on assignments-api for repeated task create or requeue pattern on same ExamSessionId in short time window",
+        "AppDependencies for repeated Twilio task API calls",
+        "Assignment/assignment for multiple records in non-terminal state for same ExamSessionId",
+        "Reference KB PRT0933 (Ghost Tasks) and PRT0849 (Removing Task/Session)"
+      ],
+      "recommended_tools": ["queryCosmos", "queryKQL"],
+      "escalation_required": true,
+      "guardrail": "Escalate to AAT for task cleanup. Reference PRT0933 and PRT0849."
+    },
+    {
+      "issue_type": "kill_session_failure",
+      "when_query_contains": ["failed to kill", "kill session failed", "couldn't end session", "session won't close", "process not killed"],
+      "required_checks": [
+        "AppTraces on candidate-app: search 'Failed to kill process' or 'failed to kill app' to identify which process failed",
+        "Session-log Entries.Metadata for kill-related markers around same timestamp",
+        "getSessionTimeline for process kill signal context before and after failure",
+        "Confirm whether session ultimately closed or remained orphaned"
+      ],
+      "recommended_tools": ["getSessionData", "getSessionTimeline", "queryKQL"],
+      "escalation_required": true,
+      "guardrail": "Escalate to AAT if session did not close cleanly. Reference PRT0849 for session removal."
+    }
+  ],
+  "aat_escalation_sop": {
+    "description": "Standard procedure for escalating issues to the AAT (Advanced Agent Team) that require direct intervention.",
+    "escalation_triggers": [
+      "Duplicate session confirmed (role0 with multiple active role1/role2 in Conference DB)",
+      "Kill session failure resulting in unclosed session",
+      "Assignment inconsistency not resolvable by standard troubleshooting",
+      "Ghost task requiring direct queue cleanup",
+      "Proctor permanently disconnected with candidate stuck waiting"
+    ],
+    "escalation_steps": [
+      {
+        "step": 1,
+        "action": "Validate the issue",
+        "detail": "Confirm the trigger condition is met using deterministic data (Conference DB role count, AppTraces kill failure, Assignment state mismatch)"
+      },
+      {
+        "step": 2,
+        "action": "Collect required identifiers",
+        "detail": "Gather: Room SID (from PPR.Conferences), ConfirmationCode, Timestamp of incident"
+      },
+      {
+        "step": 3,
+        "action": "Attach evidence",
+        "detail": "Include participant metadata from Conference DB, relevant log/trace excerpts, and assignment state snapshot"
+      },
+      {
+        "step": 4,
+        "action": "Provide concise summary",
+        "detail": "Write a clear description: issue type, what was confirmed, what data was collected, and why escalation is needed"
+      },
+      {
+        "step": 5,
+        "action": "Submit to AAT",
+        "detail": "Create AAT ticket with all collected evidence. Reference applicable KB article."
+      },
+      {
+        "step": 6,
+        "action": "Follow up",
+        "detail": "Track ticket resolution. Notify stakeholder when resolved. Document outcome for future reference."
+      }
+    ]
+  },
+  "kb_articles": [
+    {
+      "id": "PRT0920",
+      "title": "PPR/Twilio Cheat Sheet",
+      "use_when": "General Twilio/ProProctor reference including task states, room identifiers, and Twilio-specific debugging"
+    },
+    {
+      "id": "PRT0842",
+      "title": "Twilio Proctor Language (Okta)",
+      "use_when": "Okta Admin Portal and System Log lookups for proctor auth and language issues"
+    },
+    {
+      "id": "PRT0849",
+      "title": "Removing Task/Session",
+      "use_when": "Manual removal of stuck tasks or sessions; referenced in kill session failure and ghost task scenarios"
+    },
+    {
+      "id": "PRT0810",
+      "title": "ServiceBus Queues",
+      "use_when": "Investigating message delivery issues, queue depth abnormalities, or chat pipeline delays"
+    },
+    {
+      "id": "PRT0933",
+      "title": "Ghost Tasks Troubleshooting",
+      "use_when": "Diagnosing and resolving duplicate task/requeue loop (ghost task) scenarios"
+    }
+  ]
+}

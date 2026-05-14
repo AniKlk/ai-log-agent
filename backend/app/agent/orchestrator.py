@@ -119,7 +119,8 @@ class AgentOrchestrator:
     ) -> AgentOutput:
         profile = build_investigation_profile(query, conversation_history)
         state = build_conversation_state(conversation_history)
-        discovered_confirmation_codes = set(_CONFIRMATION_CODE_REGEX.findall(query))
+        requested_confirmation_codes = set(_CONFIRMATION_CODE_REGEX.findall(query))
+        discovered_confirmation_codes = set(requested_confirmation_codes)
         app_insights_exit_evidence: list[str] = []
         security_event_evidence: list[str] = []
         app_insights_logs: list[dict[str, str | None]] = []
@@ -284,6 +285,7 @@ class AgentOrchestrator:
                     output,
                     discovered_confirmation_codes,
                 )
+                self._restrict_output_to_requested_codes(output, requested_confirmation_codes)
                 self._apply_app_insights_visibility(output, app_insights_logs, app_insights_summary)
                 self._apply_security_event_safeguard(output, security_event_evidence)
                 self._apply_blocked_process_context(output, blocked_process_names)
@@ -313,6 +315,7 @@ class AgentOrchestrator:
                         output,
                         discovered_confirmation_codes,
                     )
+                    self._restrict_output_to_requested_codes(output, requested_confirmation_codes)
                     self._apply_app_insights_visibility(output, app_insights_logs, app_insights_summary)
                     self._apply_security_event_safeguard(output, security_event_evidence)
                     self._apply_blocked_process_context(output, blocked_process_names)
@@ -493,7 +496,7 @@ class AgentOrchestrator:
                     "content": (
                         "You are a JSON formatter. Convert analysis text into valid JSON with COMPLETE fidelity. "
                         "CRITICAL requirements:\n"
-                        "1. Preserve EVERY field: summary, root_cause, root_cause_confidence, timeline, key_findings, "
+                        "1. Preserve EVERY field: summary, triage_status, customer_response, follow_up_questions, recommended_actions, escalation_target, root_cause, root_cause_confidence, timeline, key_findings, "
                         "confirmation_codes, per_confirmation_code_summaries, per_confirmation_code_source_summary, "
                         "download_links, source_summary, tools_invoked, warnings, app_insights_logs, app_insights_summary.\n"
                         "2. Do NOT simplify or combine findings — preserve all findings with full severity, description, and evidence.\n"
@@ -545,6 +548,27 @@ class AgentOrchestrator:
             if warning:
                 merged.update(_CONFIRMATION_CODE_REGEX.findall(warning))
         return sorted(merged)
+
+    @staticmethod
+    def _restrict_output_to_requested_codes(
+        output: AgentOutput,
+        requested_codes: set[str],
+    ) -> None:
+        if not requested_codes:
+            return
+
+        allowed = set(requested_codes)
+        output.confirmation_codes = [code for code in output.confirmation_codes if code in allowed]
+        output.per_confirmation_code_summaries = {
+            code: summary
+            for code, summary in output.per_confirmation_code_summaries.items()
+            if code in allowed
+        }
+        output.per_confirmation_code_source_summary = {
+            code: summary
+            for code, summary in output.per_confirmation_code_source_summary.items()
+            if code in allowed
+        }
 
     @staticmethod
     def _extract_confirmation_codes_from_tool_result(

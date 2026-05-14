@@ -8,7 +8,10 @@ from azure.monitor.query import LogsQueryStatus
 from azure.monitor.query.aio import LogsQueryClient
 from pydantic import BaseModel
 
-from app.tools._cosmos_helpers import normalize_timestamp, resolve_exam_sessions
+from app.tools._cosmos_helpers import (
+    normalize_timestamp,
+    resolve_exam_session_id,
+)
 from app.tools.base import BaseTool
 from app.tools.models import TimelineEvent, TimelineInput, TimelineOutput
 
@@ -80,31 +83,31 @@ class GetSessionTimelineTool(BaseTool):
         is_multi = len(confirmation_codes) > 1
 
         for confirmation_code in confirmation_codes:
-            # Resolve ConfirmationCode → all related ExamSessionIds
+            # Resolve ConfirmationCode -> the latest matching ExamSessionId.
+            # For first-pass investigations we should stay scoped to the active
+            # session, not merge historical sessions that happen to share the
+            # same confirmation code lineage.
             try:
-                session_refs = await resolve_exam_sessions(
+                exam_session_id, session_record = await resolve_exam_session_id(
                     self._cosmos_client, confirmation_code
                 )
             except ValueError:
                 logger.warning("No session found for %s", confirmation_code)
                 continue
 
-            if not session_refs:
-                logger.warning("No session found for %s", confirmation_code)
-                continue
-
             current_timeline: list[TimelineEvent] = []
-            for exam_session_id, session_record in session_refs:
-                system_events = await self._query_system_events(
-                    confirmation_code,
-                    exam_session_id,
-                    session_record,
-                )
-                infra_events = await self._query_infra_events(exam_session_id, session_record)
-                session_log_events = await self._query_session_log(exam_session_id)
-                chat_events = await self._query_chat_events(exam_session_id)
+            system_events = await self._query_system_events(
+                confirmation_code,
+                exam_session_id,
+                session_record,
+            )
+            infra_events = await self._query_infra_events(exam_session_id, session_record)
+            session_log_events = await self._query_session_log(exam_session_id)
+            chat_events = await self._query_chat_events(exam_session_id)
 
-                current_timeline.extend(system_events + infra_events + session_log_events + chat_events)
+            current_timeline.extend(
+                system_events + infra_events + session_log_events + chat_events
+            )
 
             deduped_timeline: list[TimelineEvent] = []
             seen_keys: set[tuple[str, str, str]] = set()
@@ -191,16 +194,34 @@ class GetSessionTimelineTool(BaseTool):
             "let backend_timeout_traces = AppTraces "
             "{time_filter} "
             "| where _ResourceId contains 'app-proproctor-exam-sessions-api' "
+            "| where tostring(Properties) has cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
+            "   or Message has cc "
+            "   or tostring(Properties.ExamSessionId) == esid "
+            "   or tostring(Properties.examSessionId) == esid "
             "| where Message has 'timeout' or Message has 'timed out' or Message has 'cosmos' "
             "| project timestamp=TimeGenerated, event=strcat('backend timeout trace: ', Message); "
             "let request_failures = AppRequests "
             "{time_filter} "
             "| where _ResourceId contains 'app-proproctor-exam-sessions-api' "
+            "| where tostring(Url) has cc "
+            "   or tostring(Name) has cc "
+            "   or tostring(Properties) has cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
+            "   or tostring(Properties.ExamSessionId) == esid "
+            "   or tostring(Properties.examSessionId) == esid "
             "| where Success == false or ResultCode in ('408', '429', '500', '502', '503', '504') "
             "| project timestamp=TimeGenerated, event=strcat('request failure ', Name, ' result=', ResultCode, ' durationMs=', tostring(DurationMs)); "
             "let dependency_failures = AppDependencies "
             "{time_filter} "
             "| where _ResourceId contains 'app-proproctor-exam-sessions-api' "
+            "| where tostring(Name) has cc "
+            "   or tostring(Target) has cc "
+            "   or tostring(Data) has cc "
+            "   or tostring(Properties) has cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
+            "   or tostring(Properties.ExamSessionId) == esid "
+            "   or tostring(Properties.examSessionId) == esid "
             "| where Success == false or Name has 'cosmos' or Target has 'cosmos' "
             "| where Name has 'timeout' or Target has 'timeout' or tostring(Data) has 'timeout' or Success == false "
             "| project timestamp=TimeGenerated, event=strcat('dependency failure ', Name, ' target=', tostring(Target), ' result=', tostring(ResultCode)); "
@@ -209,66 +230,58 @@ class GetSessionTimelineTool(BaseTool):
             "| where _ResourceId contains 'app-proproctor-candidate-app' "
             "   or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).AppMode)) "
             "   or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).appMode)) "
-            "| where ( "
-            "    ((Properties.ExamSessionId == esid "
-            "      or Properties.examSessionId == esid "
-            "      or tostring(Properties.ConfirmationCode) == cc "
-            "      or tostring(Properties.confirmationCode) == cc "
-            "      or tostring(column_ifexists('customDimensions', dynamic({{}})).ConfirmationCode) == cc "
-            "      or tostring(column_ifexists('customDimensions', dynamic({{}})).confirmationCode) == cc "
-            "      or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
-            "      or Message has cc) "
-            "     and (Message has 'set confirmation code' "
-            "       or Message has 'confirmation code set' "
-            "       or Message has 'logged into application' "
-            "       or Message has 'login' "
-            "       or Message has 'start' "
-            "       or Message has 'launch' "
-            "       or Message has 'content protection bypassed' "
-            "       or Message has 'lockdown bypass detected')) "
-            "    or Message has 'exit' "
-            "    or Message has 'exiting app' "
-            "    or Message has 'exiting application' "
-            "    or Message has 'quit app' "
-            "    or Message has 'close app' "
-            "    or Message has 'exit lockdown window' "
-            "    or Message has 'ipc server action received: exit' "
-            "    or Message has 'content protection bypassed' "
-            "    or Message has 'lockdown bypass detected' "
-            "  ) "
+            "| where (Properties.ExamSessionId == esid "
+            "   or Properties.examSessionId == esid "
+            "   or tostring(Properties.ConfirmationCode) == cc "
+            "   or tostring(Properties.confirmationCode) == cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}})).ConfirmationCode) == cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}})).confirmationCode) == cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
+            "   or Message has cc) "
+            "| where Message has 'set confirmation code' "
+            "   or Message has 'confirmation code set' "
+            "   or Message has 'logged into application' "
+            "   or Message has 'login' "
+            "   or Message has 'start' "
+            "   or Message has 'launch' "
+            "   or Message has 'exit' "
+            "   or Message has 'exiting app' "
+            "   or Message has 'exiting application' "
+            "   or Message has 'quit app' "
+            "   or Message has 'close app' "
+            "   or Message has 'exit lockdown window' "
+            "   or Message has 'ipc server action received: exit' "
+            "   or Message has 'content protection bypassed' "
+            "   or Message has 'lockdown bypass detected' "
             "| project timestamp=TimeGenerated, event=iff(Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' or Message has 'login', strcat('candidate-app login marker: ', Message), iff(Message has 'exit' or Message has 'exiting app' or Message has 'exiting application' or Message has 'quit app' or Message has 'close app' or Message has 'exit lockdown window' or Message has 'ipc server action received: exit', strcat('candidate-app exit marker: ', Message), iff(Message has 'content protection bypassed' or Message has 'lockdown bypass detected', strcat('candidate-app security marker: ', Message), strcat('candidate-app lifecycle: ', Message)))); "
             "let candidate_lifecycle_events = AppEvents "
             "{candidate_time_filter} "
             "| where _ResourceId contains 'app-proproctor-candidate-app' "
             "   or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).AppMode)) "
             "   or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).appMode)) "
-            "| where ( "
-            "    ((Properties.ExamSessionId == esid "
-            "      or Properties.examSessionId == esid "
-            "      or tostring(Properties.ConfirmationCode) == cc "
-            "      or tostring(Properties.confirmationCode) == cc "
-            "      or tostring(column_ifexists('customDimensions', dynamic({{}})).ConfirmationCode) == cc "
-            "      or tostring(column_ifexists('customDimensions', dynamic({{}})).confirmationCode) == cc "
-            "      or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
-            "      or tostring(Properties.message) has cc) "
-            "     and (Name has 'set confirmation code' "
-            "       or Name has 'confirmation code set' "
-            "       or Name has 'logged into application' "
-            "       or Name has 'login' "
-            "       or Name has 'start' "
-            "       or Name has 'launch' "
-            "       or Name has 'content protection bypassed' "
-            "       or Name has 'lockdown bypass detected')) "
-            "    or Name has 'exit' "
-            "    or Name has 'exiting app' "
-            "    or Name has 'exiting application' "
-            "    or Name has 'quit app' "
-            "    or Name has 'close app' "
-            "    or Name has 'exit lockdown window' "
-            "    or Name has 'ipc server action received: exit' "
-            "    or Name has 'content protection bypassed' "
-            "    or Name has 'lockdown bypass detected' "
-            "  ) "
+            "| where (Properties.ExamSessionId == esid "
+            "   or Properties.examSessionId == esid "
+            "   or tostring(Properties.ConfirmationCode) == cc "
+            "   or tostring(Properties.confirmationCode) == cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}})).ConfirmationCode) == cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}})).confirmationCode) == cc "
+            "   or tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc "
+            "   or tostring(Properties.message) has cc) "
+            "| where Name has 'set confirmation code' "
+            "   or Name has 'confirmation code set' "
+            "   or Name has 'logged into application' "
+            "   or Name has 'login' "
+            "   or Name has 'start' "
+            "   or Name has 'launch' "
+            "   or Name has 'exit' "
+            "   or Name has 'exiting app' "
+            "   or Name has 'exiting application' "
+            "   or Name has 'quit app' "
+            "   or Name has 'close app' "
+            "   or Name has 'exit lockdown window' "
+            "   or Name has 'ipc server action received: exit' "
+            "   or Name has 'content protection bypassed' "
+            "   or Name has 'lockdown bypass detected' "
             "| project timestamp=TimeGenerated, event=iff(Name has 'set confirmation code' or Name has 'confirmation code set' or Name has 'logged into application' or Name has 'login', strcat('candidate-app login marker: ', Name), iff(Name has 'exit' or Name has 'exiting app' or Name has 'exiting application' or Name has 'quit app' or Name has 'close app' or Name has 'exit lockdown window' or Name has 'ipc server action received: exit', strcat('candidate-app exit marker: ', Name), iff(Name has 'content protection bypassed' or Name has 'lockdown bypass detected', strcat('candidate-app security marker: ', Name), strcat('candidate-app lifecycle event: ', Name)))); "
             "let candidate_process_signals_traces = AppTraces "
             "{process_signal_time_filter} "
@@ -291,12 +304,12 @@ class GetSessionTimelineTool(BaseTool):
             "let candidate_exit_probe_traces = AppTraces "
             "{candidate_time_filter} "
             "| where (Message has 'exit' or Message has 'exiting' or Message has 'quit app' or Message has 'close app' or Message has 'exit lockdown window' or Message has 'ipc server action received: exit' or Message has 'content protection bypassed' or Message has 'lockdown bypass detected' or Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application') "
-            "  and (tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc or tostring(Properties) has cc or Message has cc or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).AppMode)) or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).appMode))) "
+            "  and (tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc or tostring(Properties) has cc or Message has cc) "
             "| project timestamp=TimeGenerated, event=iff(Message has 'set confirmation code' or Message has 'confirmation code set' or Message has 'logged into application' or Message has 'login', strcat('candidate-app login marker (probe): ', Message), iff(Message has 'content protection bypassed' or Message has 'lockdown bypass detected', strcat('candidate-app security marker (probe): ', Message), strcat('candidate-app exit marker (probe): ', Message))); "
             "let candidate_exit_probe_events = AppEvents "
             "{candidate_time_filter} "
             "| where (Name has 'exit' or Name has 'exiting' or Name has 'quit app' or Name has 'close app' or Name has 'exit lockdown window' or Name has 'ipc server action received: exit' or Name has 'content protection bypassed' or Name has 'lockdown bypass detected' or Name has 'set confirmation code' or Name has 'confirmation code set' or Name has 'logged into application') "
-            "  and (tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc or tostring(Properties) has cc or tostring(Name) has cc or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).AppMode)) or isnotempty(tostring(column_ifexists('customDimensions', dynamic({{}})).appMode))) "
+            "  and (tostring(column_ifexists('customDimensions', dynamic({{}}))) has cc or tostring(Properties) has cc or tostring(Name) has cc) "
             "| project timestamp=TimeGenerated, event=iff(Name has 'set confirmation code' or Name has 'confirmation code set' or Name has 'logged into application' or Name has 'login', strcat('candidate-app login marker (probe): ', Name), iff(Name has 'content protection bypassed' or Name has 'lockdown bypass detected', strcat('candidate-app security marker (probe): ', Name), strcat('candidate-app exit marker (probe): ', Name))); "
             "let candidate_role_probe_traces = AppTraces "
             "{candidate_time_filter} "
@@ -349,17 +362,22 @@ class GetSessionTimelineTool(BaseTool):
 
         legacy_kql = (
             "let cc = '{code}'; "
+            "let esid = '{esid}'; "
             "let anchors = AppTraces "
-            "| where TimeGenerated >= ago(365d) "
+            "{candidate_time_filter} "
             "| extend msg = tostring(column_ifexists('Message', '')) "
             "| extend cd = tostring(column_ifexists('customDimensions', dynamic({{}}))) "
             "| extend props = tostring(column_ifexists('Properties', dynamic({{}}))) "
             "| extend sid = coalesce(tostring(column_ifexists('session_Id', '')), tostring(column_ifexists('SessionId', ''))) "
             "| extend opid = coalesce(tostring(column_ifexists('operation_Id', '')), tostring(column_ifexists('OperationId', ''))) "
-            "| where cd has cc or props has cc or msg has cc "
+            "| where cd has cc "
+            "   or props has cc "
+            "   or msg has cc "
+            "   or tostring(Properties.ExamSessionId) == esid "
+            "   or tostring(Properties.examSessionId) == esid "
             "| summarize by sid, opid; "
             "AppTraces "
-            "| where TimeGenerated >= ago(365d) "
+            "{candidate_time_filter} "
             "| extend ts = TimeGenerated "
             "| extend msg = tostring(column_ifexists('Message', '')) "
             "| extend sid = coalesce(tostring(column_ifexists('session_Id', '')), tostring(column_ifexists('SessionId', ''))) "
@@ -369,7 +387,11 @@ class GetSessionTimelineTool(BaseTool):
             "| where msg has 'exit' or msg has 'exiting' or msg has 'quit app' or msg has 'close app' or msg has 'exit lockdown window' or msg has 'ipc server action received: exit' or msg has 'content protection bypassed' or msg has 'lockdown bypass detected' or msg has 'set confirmation code' or msg has 'confirmation code set' or msg has 'logged into application' "
             "| project timestamp=ts, event=iff(msg has 'set confirmation code' or msg has 'confirmation code set' or msg has 'logged into application' or msg has 'login', strcat('candidate-app login marker (legacy): ', msg), iff(msg has 'content protection bypassed' or msg has 'lockdown bypass detected', strcat('candidate-app security marker (legacy): ', msg), strcat('candidate-app exit marker (legacy): ', msg))) "
             "| order by timestamp asc"
-        ).format(code=confirmation_code.replace("'", "''"))
+        ).format(
+            code=confirmation_code.replace("'", "''"),
+            esid=exam_session_id.replace("'", "''"),
+            candidate_time_filter=candidate_time_filter or time_filter,
+        )
 
         try:
             legacy_response = await self._logs_client.query_workspace(
