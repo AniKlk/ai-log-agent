@@ -1,9 +1,11 @@
 import json
+import re
 from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 
 _KNOWLEDGE_PATH = Path(__file__).with_name("operations_knowledge.json")
+_KB_ID_REGEX = re.compile(r"\bPRT\d{4}\b", re.IGNORECASE)
 
 
 @lru_cache(maxsize=1)
@@ -120,6 +122,95 @@ def select_issue_workflows(issue_types: Iterable[str], normalized_query: str) ->
     return selected
 
 
+def _extract_kb_ids_from_text(value: object) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        return {match.upper() for match in _KB_ID_REGEX.findall(value)}
+    if isinstance(value, list):
+        found: set[str] = set()
+        for item in value:
+            found |= _extract_kb_ids_from_text(item)
+        return found
+    if isinstance(value, dict):
+        found: set[str] = set()
+        for item in value.values():
+            found |= _extract_kb_ids_from_text(item)
+        return found
+    return set()
+
+
+def select_kb_articles(
+    issue_types: Iterable[str],
+    normalized_query: str,
+    selected_playbooks: list[dict] | None = None,
+    selected_workflows: list[dict] | None = None,
+) -> list[dict]:
+    kb_by_id = {
+        str(article.get("id", "")).upper(): article
+        for article in get_kb_articles()
+        if str(article.get("id", "")).strip()
+    }
+    if not kb_by_id:
+        return []
+
+    issue_set = {issue.strip().lower() for issue in issue_types if issue and issue.strip()}
+    query = normalized_query.lower()
+    selected_ids: set[str] = set()
+
+    # 1) Explicit KB mentions in the user query.
+    selected_ids |= {match.upper() for match in _KB_ID_REGEX.findall(query)}
+
+    # 2) KB references already encoded in matched workflows/playbooks.
+    for workflow in selected_workflows or []:
+        selected_ids |= _extract_kb_ids_from_text(workflow)
+    for playbook in selected_playbooks or []:
+        selected_ids |= _extract_kb_ids_from_text(playbook)
+
+    # 3) Query asks for KB/help article and matches article semantics.
+    kb_intent = any(
+        token in query
+        for token in (
+            "kb",
+            "knowledge base",
+            "knowledge article",
+            "which article",
+            "what article",
+            "what kb",
+            "which kb",
+            "refer",
+            "salesforce",
+        )
+    )
+    if kb_intent:
+        for article in kb_by_id.values():
+            title = str(article.get("title", "")).lower()
+            use_when = str(article.get("use_when", "")).lower()
+            if any(term in query for term in (title, use_when)):
+                selected_ids.add(str(article.get("id", "")).upper())
+
+        # Domain keywords mapped to known KBs.
+        if any(token in query for token in ("ghost task", "requeue", "duplicate task")):
+            selected_ids |= {"PRT0933", "PRT0849"}
+        if any(token in query for token in ("servicebus", "queue", "chat delay", "message delivery")):
+            selected_ids.add("PRT0810")
+        if any(token in query for token in ("twilio", "room sid", "reservation", "task state")):
+            selected_ids.add("PRT0920")
+        if any(token in query for token in ("okta", "proctor language", "system log", "auth")):
+            selected_ids.add("PRT0842")
+
+    # 4) Issue-type fallback mapping.
+    if "duplicate_task_requeue" in issue_set:
+        selected_ids |= {"PRT0933", "PRT0849"}
+    if "kill_session_failure" in issue_set:
+        selected_ids.add("PRT0849")
+    if "chat_issue" in issue_set:
+        selected_ids.add("PRT0810")
+
+    ordered_ids = sorted(selected_ids)
+    return [kb_by_id[kb_id] for kb_id in ordered_ids if kb_id in kb_by_id]
+
+
 def build_knowledge_guidance(
     services: Iterable[str], issue_types: Iterable[str], normalized_query: str
 ) -> list[str]:
@@ -176,6 +267,19 @@ def build_knowledge_guidance(
         guardrail = str(workflow.get("guardrail", "")).strip()
         if guardrail:
             lines.append("Workflow guardrail: " + guardrail)
+
+    selected_kb_articles = select_kb_articles(
+        issue_types,
+        normalized_query,
+        selected_playbooks=selected_playbooks,
+        selected_workflows=selected_workflows,
+    )
+    if selected_kb_articles:
+        kb_preview = "; ".join(
+            f"{article.get('id')} ({article.get('title')})"
+            for article in selected_kb_articles[:3]
+        )
+        lines.append("KB references: " + kb_preview)
 
     false_positives = get_known_false_positives()
     if false_positives and any(

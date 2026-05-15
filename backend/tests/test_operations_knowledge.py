@@ -3,6 +3,7 @@ from app.agent.operations_knowledge import (
     get_deterministic_issue_workflows,
     get_ingestion_templates,
     get_standard_troubleshooting_process,
+    select_kb_articles,
     select_event_taxonomy,
     select_issue_workflows,
     select_playbooks,
@@ -60,3 +61,26 @@ def test_ingestion_templates_and_process_are_available() -> None:
     assert process
     assert process[0].get("step") == 1
     assert workflows
+
+
+def test_select_kb_articles_for_duplicate_task_issue_type() -> None:
+    selected = select_kb_articles(
+        issue_types=["duplicate_task_requeue"],
+        normalized_query="user reports duplicate tasks and asked what kb to refer",
+    )
+
+    ids = {str(item.get("id")) for item in selected}
+    assert "PRT0933" in ids
+    assert "PRT0849" in ids
+
+
+def test_build_knowledge_guidance_includes_kb_references_for_kb_query() -> None:
+    guidance = build_knowledge_guidance(
+        services=[],
+        issue_types=["chat_issue"],
+        normalized_query="chat messages delayed, which kb should i refer to",
+    )
+
+    joined = " ".join(guidance)
+    assert "KB references:" in joined
+    assert "PRT0810" in joined

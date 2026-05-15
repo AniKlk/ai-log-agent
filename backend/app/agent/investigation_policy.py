@@ -229,7 +229,7 @@ def build_investigation_system_message(profile: InvestigationProfile) -> str:
     )
     if knowledge_guidance:
         lines.append("- Encoded operational knowledge loaded for this investigation:")
-        for hint in knowledge_guidance[:4]:
+        for hint in knowledge_guidance[:6]:
             lines.append(f"  - {hint}")
 
     lines.extend(
