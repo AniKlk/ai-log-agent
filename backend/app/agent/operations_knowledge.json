@@ -105,14 +105,15 @@
     },
     {
       "event_type": "security_violation",
-      "aliases": ["lockdown bypass", "content protection bypassed", "security violation"],
+      "aliases": ["lockdown bypass", "content protection bypassed", "content protection verification failure", "CONTENT_PROTECTION_BYPASSED"],
       "primary_signals": [
         "SessionLogType in (13,14)",
-        "candidate-app security marker",
-        "content protection bypassed"
+        "candidate-app security marker: Lockdown bypass detected",
+        "CONTENT_PROTECTION_BYPASSED in session-log or AppTraces"
       ],
       "tables": ["ExamSession/session-log", "AppTraces", "AppEvents"],
-      "default_scope": "candidate"
+      "default_scope": "candidate",
+      "tone_guidance": "This is a content-protection verification failure, not a confirmed security breach. The application detected that OS-level screen-capture protection could no longer be verified and exited by design. Most commonly caused by local system conditions (OS behaviour, drivers, security software, VDI/remote desktop tools). Does not confirm content was captured or candidate acted intentionally. The session end is protective and preventative, not punitive."
     },
     {
       "event_type": "relogin_failure",
@@ -523,16 +524,17 @@
     },
     {
       "issue_type": "security_violation",
-      "when_query_contains": ["security", "lockdown", "content protection", "bypass"],
+      "when_query_contains": ["security", "lockdown", "content protection", "bypass", "CONTENT_PROTECTION_BYPASSED"],
       "required_checks": [
         "SessionLogType 13/14 and candidate-app security markers",
-        "Differentiate security alert vs enforced termination",
-        "Validate user impact in timeline/chat context"
+        "Confirm whether session ended (protective exit) vs alert-only with session continuing",
+        "Check candidate chat and session timeline for any corroborating evidence of intentional action",
+        "Note local system context: OS, drivers, security software, VDI/remote desktop tools can trigger this without candidate fault"
       ],
       "recommended_tools": ["getSessionData", "getSessionTimeline", "queryKQL"],
-      "escalation_target": "PRT",
-      "consult": "Security team — share evidence before resolving",
-      "guardrail": "Do not claim exam failure from security markers alone without session disruption evidence."
+      "escalation_target": "AAT",
+      "consult": "Escalate to AAT for review; AAT decides further routing. Do not independently classify as intentional breach without corroborating evidence.",
+      "guardrail": "CONTENT_PROTECTION_BYPASSED is a verification failure, not a confirmed breach. Do not use alarming language (breach, stolen, malicious, intentional) without independent corroborating evidence. The application's session-end response is protective and preventative, not punitive. Most commonly caused by local system conditions."
     },
     {
       "issue_type": "backend_timeout",
