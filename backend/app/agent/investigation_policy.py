@@ -343,6 +343,38 @@ def build_investigation_system_message(profile: InvestigationProfile) -> str:
             "for 'lockdown', 'Ipc', 'blocked', 'deny-list', 'unauthorized application', 'failed to kill process', 'failed to kill app', and 'failed to kill' keywords. "
             "When present, extract and report the app/process name that failed to terminate."
         )
+    if any(token in normalized for token in ("photo upload", "upload photo", "candidate photo", "candidate-photo", "id upload", "candidate-id", "review snapshot")):
+        lines.append(
+            "- Photo/ID upload intent: inspect both exam-sessions photo endpoint and fraud-model endpoints. "
+            "Differentiate UploadFailed transport/API failures from AnalyzeFailed quality/analysis outcomes, and capture HTTP class (401/403/404/5xx/timeout)."
+        )
+    if any(token in normalized for token in ("camera", "no access to camera", "camera not allowed", "generic camera error", "blank camera", "camera timeout")):
+        lines.append(
+            "- Camera-access intent: inspect candidate-app/environment-camera traces for permission denials, "
+            "getUserMedia/stream initialization retries, and blank-stream timeouts before labeling backend upload as root cause."
+        )
+    if any(token in normalized for token in ("alert popup", "popup", "issues detected", "generic alert", "error code")):
+        lines.append(
+            "- Candidate-popup intent: correlate alert payload error codes (photo_check/id_check/comparison_check) "
+            "with same-window candidate-app/fraud-model trace evidence to explain why the popup was shown."
+        )
+    if any(token in normalized for token in ("screenshot", "screen shot", "error message", "message", "couldn't find", "cannot find", "not found", "no logs", "no results")):
+        lines.append(
+            "- Screenshot/message-text guardrail: do NOT conclude absence of logging when literal UI text has no hits. "
+            "Many candidate-facing strings are i18n/UI-only. Pivot to correlation queries by ConfirmationCode/ExamSessionId/time window, "
+            "then inspect endpoint failures (`candidate-photo`, `candidate-id`, `photos-v2`), status transitions (UploadFailed/AnalyzeFailed), "
+            "and alert errorCode payloads."
+        )
+        if profile.confirmation_codes:
+            lines.append(
+                "- UX guardrail: if a confirmation code is already available in conversation context, do NOT ask for it again; "
+                "ask only for approximate timestamp/time window, then proceed with correlation queries."
+            )
+        else:
+            lines.append(
+                "- UX guardrail: request the minimal missing identifiers only (prefer ConfirmationCode first, then approximate timestamp) "
+                "before running broad fallback queries."
+            )
     if any(token in normalized for token in ("pod", "crash", "restart", "container", "kubernetes", "infra", "oom", "memory", "security", "lockdown", "bypass", "unauthorized")):
         lines.append(
             "- Infrastructure intent: use infrastructure workspace (KubeEvents, ContainerLogV2, KubePodInventory). "

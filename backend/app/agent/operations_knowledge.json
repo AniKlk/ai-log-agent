@@ -22,6 +22,44 @@
       "depends_on": ["exam-sessions-api", "identity-service", "conferences-api", "chat-api"]
     },
     {
+      "service": "fraud-model-api",
+      "purpose": "Photo/ID capture ingestion, AI photo analysis, and candidate comparison workflow telemetry.",
+      "workspace": "proproctor",
+      "resource_id_contains": "proproctor-fraud-model-api",
+      "common_tables": ["AppTraces", "AppExceptions", "AppRequests", "AppDependencies"],
+      "key_operations": [
+        "candidate-photo upload",
+        "candidate-id upload",
+        "photo analysis",
+        "comparison check",
+        "error"
+      ],
+      "correlation_identifiers": [
+        "ConfirmationCode",
+        "ExamSessionId",
+        "operation_Id",
+        "session_Id",
+        "loggingSessionId"
+      ],
+      "depends_on": ["candidate-app", "exam-sessions-api", "ai-alert-service"]
+    },
+    {
+      "service": "environment-camera",
+      "purpose": "Environment camera token/login and candidate camera setup flow before or during readiness.",
+      "workspace": "proproctor",
+      "resource_id_contains": "proproctor-environment-camera",
+      "common_tables": ["AppTraces", "AppExceptions", "AppEvents"],
+      "key_operations": [
+        "mobile-code token",
+        "camera permission check",
+        "camera stream init",
+        "camera timeout",
+        "camera access denied"
+      ],
+      "correlation_identifiers": ["ConfirmationCode", "ExamSessionId", "operation_Id", "session_Id"],
+      "depends_on": ["identity-service", "candidate-app"]
+    },
+    {
       "service": "exam-sessions-api",
       "purpose": "Session orchestration, lifecycle state transitions, and exam metadata persistence.",
       "workspace": "proproctor",
@@ -114,6 +152,98 @@
       "tables": ["ExamSession/session-log", "AppTraces", "AppEvents"],
       "default_scope": "candidate",
       "tone_guidance": "This is a content-protection verification failure, not a confirmed security breach. The application detected that OS-level screen-capture protection could no longer be verified and exited by design. Most commonly caused by local system conditions (OS behaviour, drivers, security software, VDI/remote desktop tools). Does not confirm content was captured or candidate acted intentionally. The session end is protective and preventative, not punitive."
+    },
+    {
+      "event_type": "photo_upload_failure",
+      "aliases": [
+        "photo upload failed",
+        "unable to upload photo",
+        "candidate photo failed",
+        "selfie upload failed",
+        "review snapshot upload failed",
+        "uploadfailed"
+      ],
+      "primary_signals": [
+        "candidate-app state transition to ProcessingStatus.UploadFailed during photo flow",
+        "fraud-model endpoint failures on candidate-photo or photos-v2",
+        "AppTraces/AppExceptions containing candidate-photo upload failure signatures"
+      ],
+      "tables": ["AppTraces", "AppExceptions", "AppRequests", "AppDependencies"],
+      "default_scope": "candidate",
+      "kql_templates": {
+        "default": "AppRequests | where _ResourceId contains 'fraud-model' | where Name has 'candidate-photo' or Name has 'photos-v2' | where Success == false | project TimeGenerated, ResultCode, Message, AppRoleInstance, customDimensions.ConfirmationCode, customDimensions.ExamSessionId | order by TimeGenerated desc | limit 100",
+        "with_error_detail": "AppExceptions | where _ResourceId contains 'fraud-model' | where ProblemId has 'photo' or Message has 'photo' or Message has 'upload' | project TimeGenerated, ProblemId, Message, SeverityLevel, customDimensions | order by TimeGenerated desc | limit 50",
+        "correlation_by_session": "AppRequests | where _ResourceId contains 'fraud-model' | where Name has 'candidate-photo' | project operation_Id, session_Id, TimeGenerated, ResultCode | join (AppTraces | where _ResourceId contains 'candidate-app' | project operation_Id, Message, TimeGenerated) on operation_Id | order by TimeGenerated asc"
+      }
+    },
+    {
+      "event_type": "id_upload_failure",
+      "aliases": [
+        "id upload failed",
+        "unable to upload id",
+        "candidate id failed",
+        "identification upload failed",
+        "id capture failed"
+      ],
+      "primary_signals": [
+        "candidate-app state transition to ProcessingStatus.UploadFailed during ID flow",
+        "fraud-model endpoint failures on candidate-id",
+        "AppTraces/AppExceptions containing candidate-id upload failure signatures"
+      ],
+      "tables": ["AppTraces", "AppExceptions", "AppRequests", "AppDependencies"],
+      "default_scope": "candidate",
+      "kql_templates": {
+        "default": "AppRequests | where _ResourceId contains 'fraud-model' | where Name has 'candidate-id' or Name has 'candidateId' | where Success == false | project TimeGenerated, ResultCode, Message, AppRoleInstance, customDimensions.ConfirmationCode, customDimensions.ExamSessionId | order by TimeGenerated desc | limit 100",
+        "with_error_detail": "AppExceptions | where _ResourceId contains 'fraud-model' | where ProblemId has 'id' or Message has 'identification' or Message has 'candidateId' | project TimeGenerated, ProblemId, Message, SeverityLevel, customDimensions | order by TimeGenerated desc | limit 50",
+        "comparison_with_photo": "AppRequests | where _ResourceId contains 'fraud-model' | where (Name has 'candidate-photo' or Name has 'candidate-id') and Success == false | summarize FailureCount=count() by Name, ResultCode | order by FailureCount desc"
+      }
+    },
+    {
+      "event_type": "camera_access_failure",
+      "aliases": [
+        "camera not allowed",
+        "no access to camera",
+        "generic camera error",
+        "camera permission denied",
+        "camera timeout",
+        "blank camera stream"
+      ],
+      "primary_signals": [
+        "environment-camera errors no_access_to_camera or generic_camera_error",
+        "candidate-app logs indicating camera access checks exhausted/retry max",
+        "media getUserMedia failures or blank stream timeout markers"
+      ],
+      "tables": ["AppTraces", "AppExceptions", "AppEvents"],
+      "default_scope": "candidate",
+      "kql_templates": {
+        "default": "AppTraces | where _ResourceId contains 'environment-camera' | where Message has 'Camera access check' or Message has 'camera' | project TimeGenerated, Message, SeverityLevel, customDimensions | order by TimeGenerated desc | limit 100",
+        "permission_denied": "AppTraces | where _ResourceId contains 'environment-camera' | where Message has 'no_access_to_camera' or Message has 'CAMERA_NOT_ALLOWED_ERROR' | project TimeGenerated, Message, customDimensions.errorName, customDimensions.PodName | order by TimeGenerated desc",
+        "retry_exhaustion": "AppTraces | where _ResourceId contains 'environment-camera' | where Message has 'reached max attempts' | project TimeGenerated, Message, customDimensions.checkIndex | order by TimeGenerated desc",
+        "exceptions": "AppExceptions | where _ResourceId contains 'environment-camera' | where ProblemId has 'camera' or Message has 'getUserMedia' | project TimeGenerated, ProblemId, Message, SeverityLevel | order by TimeGenerated desc | limit 50"
+      }
+    },
+    {
+      "event_type": "candidate_alert_popup",
+      "aliases": [
+        "alert popup shown",
+        "candidate saw alert",
+        "error alert on candidate screen",
+        "issues detected modal",
+        "generic alert shown"
+      ],
+      "primary_signals": [
+        "AI alert/check-not-fulfilled events with errorCode payload mapped to candidate UI",
+        "photo/id verification flow emits photo-and-id-error-alert and non-empty errorCodes",
+        "signalr alert messages for photo_check/id_check/comparison_check"
+      ],
+      "tables": ["AppEvents", "AppTraces", "ExamSession/session-log"],
+      "default_scope": "candidate",
+      "kql_templates": {
+        "default": "AppTraces | where _ResourceId contains 'fraud-model' | where Message has 'check-not-fulfilled' or customDimensions.alertType in ('photo_check', 'id_check', 'comparison_check') | project TimeGenerated, customDimensions.alertType, customDimensions.errorCode, Message | order by TimeGenerated desc | limit 100",
+        "by_error_code": "AppTraces | where _ResourceId contains 'fraud-model' | where customDimensions.errorCode has 'GEN' or customDimensions.errorCode has 'THR' or customDimensions.errorCode has 'ENV' | project TimeGenerated, customDimensions.errorCode, customDimensions.alertMessage, customDimensions.ConfirmationCode | order by TimeGenerated desc",
+        "signalr_health": "AppDependencies | where _ResourceId contains 'fraud-model' or Target has 'signalr' | where Type == 'Signal' | project TimeGenerated, DependencyType, Target, Success, Duration, customDimensions | order by TimeGenerated desc | limit 50",
+        "candidate_app_correlation": "AppTraces | where _ResourceId contains 'candidate-app' | where Message has 'photo-and-id-error-alert' or Message has 'IssuesDetectedModal' or customDimensions.component == 'issues-detected-modal' | project TimeGenerated, Message, customDimensions | order by TimeGenerated asc | limit 100"
+      }
     },
     {
       "event_type": "relogin_failure",
@@ -350,6 +480,44 @@
       ],
       "escalation_guidance": "Escalate to AAT if kill failure resulted in session not completing cleanly. Reference KB PRT0849 for session removal steps.",
       "escalation_target": "AAT"
+    },
+    {
+      "symptom": "photo/id upload failures",
+      "tags": ["photo_upload_failure", "id_upload_failure", "camera", "fraud_model"],
+      "detection": "Candidate cannot submit photo/ID and UI shows upload failure or retry loop",
+      "likely_causes": [
+        "fraud-model candidate-photo/candidate-id endpoint failure",
+        "exam-sessions photos-v2 upload failure",
+        "camera stream/permission instability causing invalid capture payload",
+        "token/subscription/auth header mismatch for upload call"
+      ],
+      "data_sources": ["AppTraces (candidate-app/fraud-model-api)", "AppRequests", "AppDependencies"],
+      "signals_to_check": [
+        "AppRequests failures for /fraud-model/{id}/candidate-photo, /fraud-model/{id}/candidate-id, /exam-sessions/{id}/photos-v2",
+        "AppTraces/AppExceptions around same timestamp for UploadFailed/camera errors",
+        "Candidate UI status transitions: UploadFailed vs AnalyzeFailed and corresponding error codes",
+        "Check auth failures (401/403), not found (404 exam session), and 5xx service errors"
+      ],
+      "escalation_guidance": "Escalate to fraud-model-api or candidate-app team when repeated upload failures occur across retries or across multiple sessions in same window.",
+      "escalation_target": "fraud-model-api"
+    },
+    {
+      "symptom": "candidate alert popup shown",
+      "tags": ["candidate_alert_popup", "issues-detected-modal", "error_codes"],
+      "detection": "Candidate reports generic alert popup or issues-detected modal during photo/ID or check-in flow",
+      "likely_causes": [
+        "signalr check-not-fulfilled event emitted with alert error code",
+        "photo/id analysis failure translated to UI modal",
+        "camera access or quality checks failing and surfacing user-facing alert"
+      ],
+      "data_sources": ["AppTraces", "AppEvents", "ExamSession/session-log"],
+      "signals_to_check": [
+        "Alert payload includes type photo_check/id_check/comparison_check with error codes",
+        "Photo/ID state contains AnalyzeFailed with populated errorCodes",
+        "Correlate alert timestamp with candidate-app/fraud-model traces to identify upstream cause"
+      ],
+      "escalation_guidance": "If popup is reproducible and backed by repeated alert codes for same stage, escalate with errorCode list + session timeline evidence.",
+      "escalation_target": "candidate-app"
     }
   ],
   "known_false_positives": [
@@ -634,6 +802,29 @@
       "recommended_tools": ["getSessionData", "getSessionTimeline", "queryKQL"],
       "escalation_required": true,
       "guardrail": "Escalate to AAT if session did not close cleanly. Reference PRT0849 for session removal."
+    },
+    {
+      "issue_type": "photo_upload_failure",
+      "when_query_contains": ["photo upload failed", "unable to upload photo", "candidate photo failed", "selfie upload", "id upload failed", "review snapshot upload"],
+      "required_checks": [
+        "AppRequests status and failure codes for /fraud-model/{id}/candidate-photo, /fraud-model/{id}/candidate-id, and /exam-sessions/{id}/photos-v2",
+        "Candidate-side status transitions (UploadFailed vs AnalyzeFailed) and related error codes",
+        "Fraud-model and candidate-app AppTraces/AppExceptions around capture timestamp",
+        "Auth/header issues (401/403), exam-session not found (404), or upstream 5xx"
+      ],
+      "recommended_tools": ["getSessionData", "getSessionTimeline", "queryKQL"],
+      "guardrail": "Differentiate upload transport failure (UploadFailed) from analysis rejection (AnalyzeFailed). Do not conflate these failure modes."
+    },
+    {
+      "issue_type": "camera_access_failure",
+      "when_query_contains": ["camera not allowed", "no access to camera", "generic camera error", "camera permission denied", "blank camera", "camera timeout"],
+      "required_checks": [
+        "Candidate-app/environment-camera traces for camera permission denials and stream timeout retries",
+        "Correlate camera failures with subsequent photo/id upload failures in same session",
+        "Confirm whether alert popup/error modal was shown to candidate and which error code was surfaced"
+      ],
+      "recommended_tools": ["getSessionData", "queryKQL"],
+      "guardrail": "If camera failed before upload request was attempted, classify as camera-access issue, not upload API failure."
     }
   ],
   "aat_escalation_sop": {

@@ -56,6 +56,20 @@
       "broker",
       "app-proproctor-events-broker"
     ],
+    "fraud-model-api": [
+      "fraud model",
+      "fraud model api",
+      "photo analysis api",
+      "candidate-photo",
+      "candidate-id",
+      "proproctor-fraud-model-api"
+    ],
+    "environment-camera": [
+      "environment camera",
+      "camera app",
+      "mobile camera",
+      "proproctor-environment-camera"
+    ],
     "proctor-flex-app": [
       "proctor flex",
       "proctor flex app",
@@ -119,6 +133,14 @@
     ],
     "events-broker": [
       "exam-sessions-api"
+    ],
+    "fraud-model-api": [
+      "candidate-app",
+      "exam-sessions-api"
+    ],
+    "environment-camera": [
+      "identity-service",
+      "candidate-app"
     ],
     "infrastructure": [
       "candidate-app",
@@ -299,6 +321,40 @@
       "content protection bypassed",
       "lockdown bypass",
       "security lock"
+    ],
+    "photo-upload": [
+      "photo upload",
+      "upload photo",
+      "unable to upload photo",
+      "failed to upload photo",
+      "candidate photo failed",
+      "candidate-photo",
+      "review snapshot",
+      "photos-v2"
+    ],
+    "id-upload": [
+      "id upload",
+      "upload id",
+      "unable to upload id",
+      "failed to upload id",
+      "candidate-id",
+      "identification upload"
+    ],
+    "camera-access": [
+      "camera not allowed",
+      "no access to camera",
+      "generic camera error",
+      "camera permission denied",
+      "camera timeout",
+      "blank camera"
+    ],
+    "alert-popup": [
+      "alert popup",
+      "popup showed",
+      "candidate alert",
+      "error popup",
+      "issues detected modal",
+      "generic alert"
     ],
     "pod-crash": [
       "pod crashed",
